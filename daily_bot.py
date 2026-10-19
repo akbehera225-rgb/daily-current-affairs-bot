@@ -592,4 +592,263 @@ REASONING_QUESTIONS = [
 ]
 
 def build_reasoning():
-    rng = random.Random
+    rng = random.Random(DAY_NUMBER + 100)
+    questions = REASONING_QUESTIONS.copy()
+    rng.shuffle(questions)
+    questions = questions[:6]
+
+    story = [
+        P("HOW TO PRACTISE", "Section"),
+        make_box(
+            "Three-step method",
+            "1. Attempt without checking the answer.<br/>"
+            "2. Mark questions that take too long.<br/>"
+            "3. Study the solution and retry the question.",
+            CYAN, PALE_BLUE
+        ),
+        Spacer(1, 5 * mm),
+        P("TODAY'S REASONING SET", "Section")
+    ]
+
+    for i, item in enumerate(questions, 1):
+        options = "<br/>".join(
+            f"{chr(65+j)}. {escape(opt)}"
+            for j, opt in enumerate(item["options"])
+        )
+        story.append(make_box(
+            f"Q{i}. {item['topic']} | Level: {item['level']}",
+            f"{escape(item['q'])}<br/><br/>{options}",
+            CYAN, PALE_BLUE
+        ))
+        story.append(Spacer(1, 3 * mm))
+
+    story.extend([
+        PageBreak(),
+        P("DETAILED SOLUTIONS", "Section")
+    ])
+
+    for i, item in enumerate(questions, 1):
+        correct = item["options"][item["answer"]]
+        story.append(P(
+            f"Q{i}. Correct answer: {chr(65+item['answer'])}. "
+            f"{escape(correct)}",
+            "Answer"
+        ))
+        story.append(P(f"<b>Method:</b> {escape(item['solution'])}"))
+        story.append(Spacer(1, 4 * mm))
+
+    return create_pdf(
+        "03_Reasoning_Practice.pdf",
+        "REASONING PRACTICE",
+        "Daily questions • Difficulty levels • Step-by-step solutions",
+        CYAN,
+        story
+    )
+
+# ==========================================================
+# PDF 4: ARITHMETIC PRACTICE
+# ==========================================================
+
+ARITHMETIC_QUESTIONS = [
+    {
+        "topic": "Percentage",
+        "level": "Easy",
+        "formula": "Percentage = (Part ÷ Whole) × 100",
+        "example": "20% of 250 = (20/100) × 250 = 50.",
+        "q": "Find 15% of 200.",
+        "options": ["20", "25", "30", "35"],
+        "answer": 2,
+        "solution": "15/100 × 200 = 30."
+    },
+    {
+        "topic": "Profit and loss",
+        "level": "Medium",
+        "formula": "Profit = Selling Price − Cost Price",
+        "example": "If CP = ₹100 and SP = ₹120, profit = ₹20 and profit percentage = 20%.",
+        "q": "An item costs ₹400 and is sold for ₹460. Find the profit percentage.",
+        "options": ["10%", "12%", "15%", "20%"],
+        "answer": 2,
+        "solution": "Profit = 460 − 400 = ₹60. Profit % = (60/400) × 100 = 15%."
+    },
+    {
+        "topic": "Ratio",
+        "level": "Easy",
+        "formula": "If a:b = m:n, the quantities are in the ratio m:n.",
+        "example": "Divide 60 in the ratio 2:3. Total parts = 5; each part = 12. Shares = 24 and 36.",
+        "q": "Divide 80 in the ratio 3:5. What is the smaller share?",
+        "options": ["20", "30", "40", "50"],
+        "answer": 1,
+        "solution": "Total parts = 8. One part = 80/8 = 10. Smaller share = 3 × 10 = 30."
+    },
+    {
+        "topic": "Average",
+        "level": "Easy",
+        "formula": "Average = Sum of observations ÷ Number of observations",
+        "example": "Average of 4, 6 and 8 = 18/3 = 6.",
+        "q": "Find the average of 12, 18, 20 and 10.",
+        "options": ["12", "15", "16", "18"],
+        "answer": 1,
+        "solution": "Sum = 12 + 18 + 20 + 10 = 60. Average = 60/4 = 15."
+    },
+    {
+        "topic": "Simple interest",
+        "level": "Medium",
+        "formula": "SI = (Principal × Rate × Time) ÷ 100",
+        "example": "For P = ₹1,000, R = 5% and T = 2 years, SI = ₹100.",
+        "q": "Find simple interest on ₹2,000 at 5% per year for 3 years.",
+        "options": ["₹200", "₹250", "₹300", "₹350"],
+        "answer": 2,
+        "solution": "SI = (2000 × 5 × 3)/100 = ₹300."
+    },
+    {
+        "topic": "Time and work",
+        "level": "Medium",
+        "formula": "If a person completes a job in x days, one day's work = 1/x.",
+        "example": "A finishes in 5 days. One day's work = 1/5.",
+        "q": "A person completes a job in 10 days. What fraction is completed in 2 days at a constant rate?",
+        "options": ["1/2", "1/5", "1/10", "2/5"],
+        "answer": 1,
+        "solution": "One day's work = 1/10. In 2 days, work = 2/10 = 1/5."
+    },
+    {
+        "topic": "Speed, distance and time",
+        "level": "Easy",
+        "formula": "Speed = Distance ÷ Time",
+        "example": "A vehicle travels 120 km in 3 hours. Speed = 40 km/h.",
+        "q": "A vehicle travels 150 km in 3 hours. Find its average speed.",
+        "options": ["30 km/h", "40 km/h", "50 km/h", "60 km/h"],
+        "answer": 2,
+        "solution": "Speed = 150/3 = 50 km/h."
+    },
+    {
+        "topic": "Number system",
+        "level": "Easy",
+        "formula": "For two positive integers: HCF × LCM = Product of the integers.",
+        "example": "For 4 and 6, HCF = 2 and LCM = 12; 2 × 12 = 4 × 6.",
+        "q": "What is the HCF of 18 and 24?",
+        "options": ["3", "4", "6", "12"],
+        "answer": 2,
+        "solution": "The greatest number dividing both 18 and 24 is 6."
+    },
+]
+
+def build_arithmetic():
+    rng = random.Random(DAY_NUMBER + 200)
+    questions = ARITHMETIC_QUESTIONS.copy()
+    rng.shuffle(questions)
+    questions = questions[:6]
+
+    story = [
+        P("FORMULAS & SHORTCUTS", "Section"),
+        make_box(
+            "Smart practice",
+            "First memorise the formula, then understand the worked example. "
+            "Attempt the MCQ before reading its solution.",
+            ORANGE, PALE_ORANGE
+        ),
+        Spacer(1, 5 * mm),
+        P("TODAY'S ARITHMETIC SET", "Section")
+    ]
+
+    for i, item in enumerate(questions, 1):
+        story.append(make_box(
+            f"Q{i}. {item['topic']} | Level: {item['level']}",
+            f"<b>Formula:</b> {escape(item['formula'])}<br/>"
+            f"<b>Worked example:</b> {escape(item['example'])}<br/><br/>"
+            f"<b>Question:</b> {escape(item['q'])}",
+            ORANGE, PALE_ORANGE
+        ))
+
+        option_text = " &nbsp; | &nbsp; ".join(
+            f"{chr(65+j)}. {escape(option)}"
+            for j, option in enumerate(item["options"])
+        )
+        story.append(P(option_text))
+        story.append(Spacer(1, 4 * mm))
+
+    story.extend([
+        PageBreak(),
+        P("ANSWER KEY & WORKED SOLUTIONS", "Section")
+    ])
+
+    for i, item in enumerate(questions, 1):
+        correct = item["options"][item["answer"]]
+        story.append(P(
+            f"Q{i}. Answer: {chr(65+item['answer'])}. {escape(correct)}",
+            "Answer"
+        ))
+        story.append(P(f"<b>Working:</b> {escape(item['solution'])}"))
+        story.append(Spacer(1, 4 * mm))
+
+    return create_pdf(
+        "04_Arithmetic_Practice.pdf",
+        "ARITHMETIC PRACTICE",
+        "Formulas • Shortcuts • Worked examples • MCQs",
+        ORANGE,
+        story
+    )
+
+# ==========================================================
+# SEND FILES TO TELEGRAM
+# ==========================================================
+
+def send_telegram_document(file_path, caption):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+
+    with open(file_path, "rb") as document:
+        response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "caption": caption
+            },
+            files={
+                "document": (
+                    os.path.basename(file_path),
+                    document,
+                    "application/pdf"
+                )
+            },
+            timeout=60
+        )
+
+    response.raise_for_status()
+    result = response.json()
+
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram error: {result}")
+
+    print(f"Sent successfully: {os.path.basename(file_path)}")
+
+def main():
+    jobs = [
+        (
+            build_current_affairs,
+            "📰 Daily Current Affairs | Source links included"
+        ),
+        (
+            build_static_gk,
+            "🌍 Static GK | Revision notes + MCQs"
+        ),
+        (
+            build_reasoning,
+            "🧠 Reasoning Practice | Questions + solutions"
+        ),
+        (
+            build_arithmetic,
+            "🔢 Arithmetic Practice | Formulas + worked examples"
+        ),
+    ]
+
+    for build_function, caption in jobs:
+        try:
+            pdf_path = build_function()
+            send_telegram_document(pdf_path, caption)
+        except Exception as error:
+            print(f"FAILED: {caption}: {error}")
+            raise
+
+    print("All four daily PDFs have been generated and sent.")
+
+if __name__ == "__main__":
+    main()
