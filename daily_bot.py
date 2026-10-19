@@ -7,9 +7,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, String, Circle
 
-# --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8395103968:AAH_HQI9IANzBtPfOUczQ4V05PyjoEYfsK4"
-TELEGRAM_CHAT_ID = "@dailyaffairs25"
+TELEGRAM_CHAT_ID = "-1004360405775"
+
 PAGE_WIDTH = 450
 PAGE_HEIGHT = 800
 
@@ -34,23 +34,18 @@ class SlideCardCanvas(canvas.Canvas):
         self.saveState()
         today_str = datetime.now().strftime("%d %B %Y").upper()
 
-        # Header Bar
         self.setFillColor(colors.HexColor("#0f172a"))
         self.rect(0, PAGE_HEIGHT - 48, PAGE_WIDTH, 48, fill=1, stroke=0)
-        
         self.setFont("Helvetica-Bold", 10)
         self.setFillColor(colors.HexColor("#38bdf8"))
         self.drawString(22, PAGE_HEIGHT - 30, "DAILY EXAM CURRENT AFFAIRS")
-        
         self.setFont("Helvetica-Bold", 10)
         self.setFillColor(colors.white)
         self.drawRightString(PAGE_WIDTH - 22, PAGE_HEIGHT - 30, today_str)
 
-        # Footer Branding
         footer_h = 100
         self.setFillColor(colors.HexColor("#1e293b"))
         self.rect(0, 0, PAGE_WIDTH, footer_h, fill=1, stroke=0)
-
         self.setStrokeColor(colors.HexColor("#3b82f6"))
         self.setLineWidth(3)
         self.line(0, footer_h, PAGE_WIDTH, footer_h)
@@ -58,18 +53,14 @@ class SlideCardCanvas(canvas.Canvas):
         self.setFont("Helvetica-Bold", 12)
         self.setFillColor(colors.HexColor("#f8fafc"))
         self.drawCentredString(PAGE_WIDTH / 2.0, 72, "CRACK GOVT EXAMS | DAILY CAPSULE")
-
         self.setFont("Helvetica", 9)
         self.setFillColor(colors.HexColor("#94a3b8"))
         self.drawCentredString(PAGE_WIDTH / 2.0, 52, "Complete GK/GS • UPSC, SSC, Banking, Railways & State Exams")
-
         self.setFillColor(colors.HexColor("#2563eb"))
         self.roundRect(PAGE_WIDTH / 2.0 - 90, 16, 180, 24, 6, fill=1, stroke=0)
-
         self.setFont("Helvetica-Bold", 9)
         self.setFillColor(colors.white)
         self.drawCentredString(PAGE_WIDTH / 2.0, 24, "DOWNLOAD DAILY PDF & NOTES")
-
         self.setFont("Helvetica-Bold", 8)
         self.setFillColor(colors.HexColor("#64748b"))
         self.drawRightString(PAGE_WIDTH - 18, 18, f"Card {self._pageNumber}/{total_pages}")
@@ -101,7 +92,7 @@ def generate_pdf(filename, news_items):
     body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=10.5, leading=16, textColor=colors.HexColor('#334155'), spaceAfter=11)
 
     story = []
-    palette = ["#1e3a8a", "#0369a1", "#047857", "#7c2d12", "#4338ca", "#0f766e"]
+    palette = ["#1e3a8a", "#0369a1", "#047857", "#7c2d12"]
 
     for idx, item in enumerate(news_items):
         color = palette[idx % len(palette)]
@@ -109,10 +100,8 @@ def generate_pdf(filename, news_items):
         story.append(Spacer(1, 14))
         story.append(Paragraph(item["category"], cat_style))
         story.append(Paragraph(item["headline"], head_style))
-
         for bullet in item["bullets"]:
             story.append(Paragraph(f"<b>•</b>  {bullet}", body_style))
-
         if idx < len(news_items) - 1:
             story.append(PageBreak())
 
@@ -120,7 +109,7 @@ def generate_pdf(filename, news_items):
 
 def send_to_telegram(pdf_path):
     today = datetime.now().strftime("%d %B %Y")
-    caption = f"📚 *Daily Current Affairs Bulletin*\n🗓 *Date:* {today}\n🎯 *For:* UPSC, SSC, Banking, Railways & Defence Exams\n\n⬇️ Download the complete slide deck attached below."
+    caption = f"📚 *Daily Current Affairs Bulletin*\n🗓 *Date:* {today}\n🎯 *For:* UPSC, SSC, Banking, Railways & Defence Exams\n\n⬇️ Complete slide notes attached below."
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
 
     with open(pdf_path, 'rb') as f:
@@ -128,13 +117,13 @@ def send_to_telegram(pdf_path):
         data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'}
         response = requests.post(url, files=files, data=data)
 
-    if response.status_code == 200:
-        print("Successfully posted to Telegram channel!")
-    else:
-        print(f"Failed to post: {response.text}")
+    print("Status Code:", response.status_code)
+    print("Telegram Response:", response.text)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Telegram API Error: {response.text}")
 
 if __name__ == "__main__":
-    # Sample daily feed (can also be connected directly to your news API or database)
     sample_news = [
         {
             "category": "DEFENCE & SECURITY",
@@ -161,4 +150,4 @@ if __name__ == "__main__":
     pdf_file = f"Current_Affairs_{datetime.now().strftime('%d_%b_%Y')}.pdf"
     generate_pdf(pdf_file, sample_news)
     send_to_telegram(pdf_file)
-      
+    
