@@ -14,7 +14,7 @@ PAGE_WIDTH = 450
 PAGE_HEIGHT = 800
 
 # ==========================================
-# 1. CANVAS BASE (Page numbers, top & bottom branding)
+# 1. CANVAS BASE
 # ==========================================
 class BaseExamCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
@@ -81,52 +81,40 @@ class BaseExamCanvas(canvas.Canvas):
         self.drawRightString(PAGE_WIDTH - 18, 18, f"{self._pageNumber}/{total_pages}")
         self.restoreState()
 
-# Specialized Canvas Classes with custom header titles
 class CACanvas(BaseExamCanvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.doc_title = "⚡ DAILY CURRENT AFFAIRS (THEORY)"
+        self.doc_title = "DAILY CURRENT AFFAIRS (THEORY)"
 
 class GKCanvas(BaseExamCanvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.doc_title = "🏛️ CHAPTER-WISE STATIC GK NOTES"
+        self.doc_title = "CHAPTER-WISE STATIC GK NOTES"
 
 class PracticeCanvas(BaseExamCanvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.doc_title = "🎯 DAILY EXAM DRILL (MATH + REASONING + GK)"
+        self.doc_title = "DAILY EXAM DRILL (MATH + REASONING)"
 
 # ==========================================
 # 2. VECTOR VISUAL ILLUSTRATIONS
 # ==========================================
 def draw_asian_games_gold_winner():
-    """Generates an Asian Games Gold Medalist portrait and stadium artwork"""
     d = Drawing(PAGE_WIDTH - 40, 160)
     w, h = PAGE_WIDTH - 40, 160
-    # Stadium night background
     d.add(Rect(0, 0, w, h, rx=10, ry=10, fillColor=colors.HexColor("#061a40"), strokeColor=None))
     d.add(Circle(w - 30, 120, 80, fillColor=colors.HexColor("#003554"), fillOpacity=0.5, strokeColor=None))
-    # Track lanes
     d.add(Line(0, 30, w, 30, strokeColor=colors.HexColor("#ef4444"), strokeWidth=2))
-    d.add(Line(0, 18, w, 18, strokeColor=colors.HexColor("#f87171"), strokeWidth=1))
-    
-    # Gold Medal on left
     d.add(Circle(65, 80, 24, fillColor=colors.HexColor("#eab308"), strokeColor=colors.HexColor("#fef08a"), strokeWidth=2))
     d.add(Circle(65, 80, 18, fillColor=colors.HexColor("#ca8a04"), strokeColor=None))
     d.add(String(58, 74, "1st", fontSize=13, fontName="Helvetica-Bold", fillColor=colors.white))
-    # Ribbon
     d.add(Line(48, 120, 65, 102, strokeColor=colors.HexColor("#1d4ed8"), strokeWidth=5))
     d.add(Line(82, 120, 65, 102, strokeColor=colors.HexColor("#1d4ed8"), strokeWidth=5))
-
-    # Athlete Silhouette (Javelin / Sprint champion)
-    d.add(Circle(135, 110, 12, fillColor=colors.HexColor("#fcd34d"), strokeColor=None)) # Face
-    d.add(Polygon([125, 95, 145, 95, 140, 50, 130, 50], fillColor=colors.HexColor("#0284c7"), strokeColor=None)) # Jersey
-    d.add(Line(115, 85, 165, 125, strokeColor=colors.HexColor("#f59e0b"), strokeWidth=3)) # Javelin pole
-
-    # Title & Badge
+    d.add(Circle(135, 110, 12, fillColor=colors.HexColor("#fcd34d"), strokeColor=None))
+    d.add(Polygon([125, 95, 145, 95, 140, 50, 130, 50], fillColor=colors.HexColor("#0284c7"), strokeColor=None))
+    d.add(Line(115, 85, 165, 125, strokeColor=colors.HexColor("#f59e0b"), strokeWidth=3))
     d.add(Rect(16, 128, 150, 20, rx=10, ry=10, fillColor=colors.HexColor("#ca8a04"), strokeColor=None))
-    d.add(String(24, 134, "🏅 ASIAN GAMES GOLD", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.white))
+    d.add(String(24, 134, "ASIAN GAMES GOLD", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.white))
     d.add(String(180, 85, "NEERAJ CHOPRA", fontSize=15, fontName="Helvetica-Bold", fillColor=colors.white))
     d.add(String(180, 65, "Men's Javelin Throw • Historic Gold", fontSize=9, fontName="Helvetica", fillColor=colors.HexColor("#cbd5e1")))
     d.add(String(180, 48, "Season Best Throw: 88.88m", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#facc15")))
@@ -143,7 +131,7 @@ def draw_space_mission_art():
     d.add(Polygon([130, 77, 190, 58, 190, 96], fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#94a3b8"), strokeWidth=1))
     d.add(Line(192, 77, 208, 77, strokeColor=colors.HexColor("#facc15"), strokeWidth=2))
     d.add(Rect(16, 128, 140, 20, rx=10, ry=10, fillColor=colors.HexColor("#1e293b"), strokeColor=colors.HexColor("#38bdf8"), strokeWidth=1))
-    d.add(String(24, 134, "🚀 ISRO SPACE MISSION", fontSize=8, fontName="Helvetica-Bold", fillColor=colors.HexColor("#38bdf8")))
+    d.add(String(24, 134, "ISRO SPACE MISSION", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#38bdf8")))
     return d
 
 def draw_banner_card(title, subtitle, badge, bg_color, accent_color):
@@ -163,17 +151,16 @@ def draw_banner_card(title, subtitle, badge, bg_color, accent_color):
 def build_current_affairs_pdf(filename):
     doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
     styles = getSampleStyleSheet()
-    head_style = ParagraphStyle('CAHead', fontName='Helvetica-Bold', fontSize=14, leading=18, textColor=colors.HexColor('#0f172a'), spaceAfter=10)
+    head_style = ParagraphStyle('CAHead', fontName='Helvetica-Bold', fontSize=13.5, leading=17.5, textColor=colors.HexColor('#0f172a'), spaceAfter=8)
     story = []
 
-    # Card 1: Sports & Asian Games
     story.append(draw_asian_games_gold_winner())
     story.append(Spacer(1, 10))
     story.append(Paragraph("NEERAJ CHOPRA CLINCHES HISTORIC GOLD IN ASIAN GAMES JAVELIN THROW", head_style))
     sports_points = [
         ("Achievement", "Neeraj Chopra successfully defended his Asian Games gold medal with a season-best effort of 88.88m."),
         ("Double Podium", "Kishore Jena secured the silver medal with a personal best of 87.54m, securing India's historic 1-2 finish."),
-        ("Olympic Qualification", "Both athletes confirmed direct qualification for the upcoming international athletic events."),
+        ("Olympic Qualification", "Both athletes confirmed direct qualification for international athletic competitions."),
         ("Static Sports GK", "First Indian track-and-field athlete to win Olympic gold (Tokyo 2020) and World Athletics Championship gold.")
     ]
     for label, text in sports_points:
@@ -192,7 +179,6 @@ def build_current_affairs_pdf(filename):
 
     story.append(PageBreak())
 
-    # Card 2: Space Mission
     story.append(draw_space_mission_art())
     story.append(Spacer(1, 10))
     story.append(Paragraph("ISRO COMPLETES GAGANYAAN MODULE SEPARATION TESTS AT VSSC", head_style))
@@ -222,8 +208,7 @@ def build_static_gk_pdf(filename):
     doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
     story = []
 
-    # Chapter: Indian Polity
-    story.append(draw_banner_card("CHAPTER 1: INDIAN POLITY", "Constitutional Framework & Fundamental Rights", "🏛️ EXAM STATIC REVISION", "#1e1b4b", "#4f46e5"))
+    story.append(draw_banner_card("CHAPTER 1: INDIAN POLITY", "Constitutional Framework & Fundamental Rights", "EXAM STATIC REVISION", "#1e1b4b", "#4f46e5"))
     story.append(Spacer(1, 10))
 
     gk_theory = [
@@ -255,18 +240,17 @@ def build_practice_drill_pdf(filename):
     doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
     story = []
 
-    # Section 1: Quantitative Arithmetic
-    story.append(draw_banner_card("SECTION A: SPEED ARITHMETIC", "Percentages, Profit & Loss and Time-Work", "⏱️ 10-MINUTE DAILY DRILL", "#064e3b", "#059669"))
+    story.append(draw_banner_card("SECTION A: SPEED ARITHMETIC", "Percentages, Profit & Loss and Time-Work", "10-MINUTE DAILY DRILL", "#064e3b", "#059669"))
     story.append(Spacer(1, 8))
 
     math_questions = [
         ("Q1. Percentage & Successive Discount",
          "A shopkeeper marks an article 40% above cost price and allows a discount of 25%. Find his profit percentage.",
-         "A) 5% &nbsp;&nbsp;&nbsp;&nbsp; B) 8% &nbsp;&nbsp;&nbsp;&nbsp; C) 10% &nbsp;&nbsp;&nbsp;&nbsp; D) 12%",
+         "A) 5%     B) 8%     C) 10%     D) 12%",
          "Sol: Let CP = 100. MP = 140. SP = 140 × 0.75 = 105. Profit% = ((105-100)/100) × 100 = 5% (Ans: A)"),
         ("Q2. Time and Work",
          "A can finish a work in 12 days and B in 18 days. If they work together for 4 days, what fraction of work is left?",
-         "A) 5/9 &nbsp;&nbsp;&nbsp;&nbsp; B) 4/9 &nbsp;&nbsp;&nbsp;&nbsp; C) 1/3 &nbsp;&nbsp;&nbsp;&nbsp; D) 2/5",
+         "A) 5/9     B) 4/9     C) 1/3     D) 2/5",
          "Sol: 1 day work = 1/12 + 1/18 = 5/36. 4 days work = 4 × 5/36 = 5/9. Remaining = 1 - 5/9 = 4/9 (Ans: B)")
     ]
     for q_title, q_text, opts, sol in math_questions:
@@ -292,18 +276,17 @@ def build_practice_drill_pdf(filename):
 
     story.append(PageBreak())
 
-    # Section 2: Reasoning Drill
-    story.append(draw_banner_card("SECTION B: SPEED REASONING", "Puzzles, Syllogisms & Coding-Decoding", "🧠 LOGICAL APTITUDE", "#431407", "#ea580c"))
+    story.append(draw_banner_card("SECTION B: SPEED REASONING", "Puzzles, Syllogisms & Coding-Decoding", "LOGICAL APTITUDE", "#431407", "#ea580c"))
     story.append(Spacer(1, 8))
 
     reasoning_questions = [
         ("Q1. Number Series Analogy",
          "Find the next term: 6, 25, 62, 123, 214, ?",
-         "A) 341 &nbsp;&nbsp;&nbsp;&nbsp; B) 343 &nbsp;&nbsp;&nbsp;&nbsp; C) 339 &nbsp;&nbsp;&nbsp;&nbsp; D) 342",
+         "A) 341     B) 343     C) 339     D) 342",
          "Sol: Pattern is n³ - 2: 2³-2=6, 3³-2=25, 4³-2=62, 5³-2=123, 6³-2=214, 7³-2 = 343 - 2 = 341 (Ans: A)"),
         ("Q2. Syllogism Logic",
          "Statements: All metals are solids. Some solids are conductors.<br/>Conclusions: I. Some conductors are metals. II. Some conductors are solids.",
-         "A) Only I follows &nbsp;&nbsp;&nbsp;&nbsp; B) Only II follows &nbsp;&nbsp;&nbsp;&nbsp; C) Both &nbsp;&nbsp;&nbsp;&nbsp; D) Neither",
+         "A) Only I follows     B) Only II follows     C) Both     D) Neither",
          "Sol: Direct converse of 'Some solids are conductors' is 'Some conductors are solids'. II follows. (Ans: B)")
     ]
     for q_title, q_text, opts, sol in reasoning_questions:
@@ -330,7 +313,7 @@ def build_practice_drill_pdf(filename):
     doc.build(story, canvasmaker=PracticeCanvas)
 
 # ==========================================
-# 4. TELEGRAM SENDER (Batched 3 PDFs)
+# 4. TELEGRAM SENDER
 # ==========================================
 def send_telegram_doc(pdf_path, caption_text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
@@ -352,4 +335,11 @@ if __name__ == "__main__":
 
     # 2. Build and send Static GK PDF
     gk_pdf = f"2_Static_GK_Chapter_Notes_{today}.pdf"
-    bui
+    build_static_gk_pdf(gk_pdf)
+    send_telegram_doc(gk_pdf, f"🏛️ *[2/3] Chapter-Wise Static GK Notes*\nTopic: Indian Polity • Fundamental Rights (Articles 12-35)")
+
+    # 3. Build and send Practice Drill PDF
+    drill_pdf = f"3_Daily_Practice_Drill_Math_Reasoning_{today}.pdf"
+    build_practice_drill_pdf(drill_pdf)
+    send_telegram_doc(drill_pdf, f"🎯 *[3/3] Daily Exam Practice Drill*\nQuantitative Arithmetic + Speed Reasoning + Complete Solutions")
+        
