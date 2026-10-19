@@ -8,9 +8,8 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, String, Circle
 
 # --- CONFIGURATION ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
+TELEGRAM_BOT_TOKEN = "8395103968:AAH_HQI9IANzBtPfOUczQ4V05PyjoEYfsK4"
+TELEGRAM_CHAT_ID = "@dailyaffairs25"
 PAGE_WIDTH = 450
 PAGE_HEIGHT = 800
 
