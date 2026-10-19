@@ -14,7 +14,7 @@ PAGE_WIDTH = 450
 PAGE_HEIGHT = 800
 
 # ==========================================
-# 1. CANVAS BASE
+# 1. CANVAS BASE (Page numbers, top & bottom branding)
 # ==========================================
 class BaseExamCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
@@ -36,9 +36,6 @@ class BaseExamCanvas(canvas.Canvas):
 
     def draw_decorations(self, total_pages):
         self.saveState()
-        self.setFillColor(colors.HexColor("#f8fafc"))
-        self.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, fill=1, stroke=0)
-
         # Header Top Bar
         self.setFillColor(colors.HexColor("#0f172a"))
         self.rect(0, PAGE_HEIGHT - 54, PAGE_WIDTH, 54, fill=1, stroke=0)
@@ -342,4 +339,4 @@ if __name__ == "__main__":
     drill_pdf = f"3_Daily_Practice_Drill_Math_Reasoning_{today}.pdf"
     build_practice_drill_pdf(drill_pdf)
     send_telegram_doc(drill_pdf, f"🎯 *[3/3] Daily Exam Practice Drill*\nQuantitative Arithmetic + Speed Reasoning + Complete Solutions")
-        
+    
