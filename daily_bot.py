@@ -1,342 +1,595 @@
 import os
+import random
 import requests
+import feedparser
 from datetime import datetime
+from html import escape
+from urllib.parse import quote_plus
+
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfgen import canvas
-from reportlab.graphics.shapes import Drawing, Rect, String, Circle, Polygon, Line
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    PageBreak, KeepTogether
+)
 
-TELEGRAM_BOT_TOKEN = "8395103968:AAH_HQI9IANzBTpFOUczQ4VO5PyjoEYfsK4"
-TELEGRAM_CHAT_ID = "-1004360405775"
+# ==========================================================
+# TELEGRAM SETTINGS
+# Read securely from GitHub Actions Secrets.
+# Never put your bot token directly in this file.
+# ==========================================================
 
-PAGE_WIDTH = 450
-PAGE_HEIGHT = 800
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# ==========================================
-# 1. CANVAS BASE (Page numbers, top & bottom branding)
-# ==========================================
-class BaseExamCanvas(canvas.Canvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._saved_page_states = []
-        self.doc_title = "DAILY EXAM BULLETIN"
+TODAY = datetime.now().strftime("%d %B %Y")
+DAY_NUMBER = datetime.now().timetuple().tm_yday
 
-    def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
+OUTPUT_DIR = "daily_pdfs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    def save(self):
-        num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
-            self.__dict__.update(state)
-            self.draw_decorations(num_pages)
-            super().showPage()
-        super().save()
+# Colour palette
+NAVY = colors.HexColor("#172554")
+BLUE = colors.HexColor("#2563EB")
+CYAN = colors.HexColor("#0891B2")
+PURPLE = colors.HexColor("#7C3AED")
+GREEN = colors.HexColor("#15803D")
+ORANGE = colors.HexColor("#EA580C")
+PALE_BLUE = colors.HexColor("#EFF6FF")
+PALE_GREEN = colors.HexColor("#F0FDF4")
+PALE_PURPLE = colors.HexColor("#F5F3FF")
+PALE_ORANGE = colors.HexColor("#FFF7ED")
+LIGHT = colors.HexColor("#F8FAFC")
+DARK = colors.HexColor("#1E293B")
+GREY = colors.HexColor("#64748B")
+WHITE = colors.white
 
-    def draw_decorations(self, total_pages):
-        self.saveState()
-        # Header Top Bar
-        self.setFillColor(colors.HexColor("#0f172a"))
-        self.rect(0, PAGE_HEIGHT - 54, PAGE_WIDTH, 54, fill=1, stroke=0)
-        self.setFillColor(colors.HexColor("#f59e0b"))
-        self.rect(0, PAGE_HEIGHT - 56, PAGE_WIDTH, 2, fill=1, stroke=0)
+styles = getSampleStyleSheet()
 
-        today_str = datetime.now().strftime("%d %B %Y").upper()
-        self.setFillColor(colors.HexColor("#38bdf8"))
-        self.setFont("Helvetica-Bold", 9.5)
-        self.drawString(20, PAGE_HEIGHT - 33, self.doc_title)
-        self.setFillColor(colors.white)
-        self.setFont("Helvetica-Bold", 9.5)
-        self.drawRightString(PAGE_WIDTH - 20, PAGE_HEIGHT - 33, today_str)
+styles.add(ParagraphStyle(
+    name="CoverTitle",
+    parent=styles["Title"],
+    fontName="Helvetica-Bold",
+    fontSize=23,
+    leading=28,
+    textColor=WHITE,
+    alignment=TA_CENTER,
+    spaceAfter=8,
+))
 
-        # Footer Banner
-        footer_h = 100
-        self.setFillColor(colors.HexColor("#0f172a"))
-        self.rect(0, 0, PAGE_WIDTH, footer_h, fill=1, stroke=0)
-        self.setFillColor(colors.HexColor("#3b82f6"))
-        self.rect(0, footer_h, PAGE_WIDTH, 3, fill=1, stroke=0)
+styles.add(ParagraphStyle(
+    name="CoverSub",
+    parent=styles["Normal"],
+    fontSize=11,
+    leading=16,
+    textColor=WHITE,
+    alignment=TA_CENTER,
+))
 
-        self.setFont("Helvetica-Bold", 11)
-        self.setFillColor(colors.HexColor("#f8fafc"))
-        self.drawCentredString(PAGE_WIDTH / 2.0, 72, "CRACK GOVT EXAMS | DAILY REVISION")
-        self.setFont("Helvetica", 8.5)
-        self.setFillColor(colors.HexColor("#94a3b8"))
-        self.drawCentredString(PAGE_WIDTH / 2.0, 54, "Target: UPSC • SSC • Banking • Railways • Defence • State PSC")
+styles.add(ParagraphStyle(
+    name="Section",
+    parent=styles["Heading2"],
+    fontName="Helvetica-Bold",
+    fontSize=15,
+    leading=19,
+    textColor=NAVY,
+    spaceBefore=12,
+    spaceAfter=8,
+))
 
-        btn_w, btn_h = 240, 24
-        btn_x = (PAGE_WIDTH - btn_w) / 2.0
-        btn_y = 18
-        self.setFillColor(colors.HexColor("#2563eb"))
-        self.roundRect(btn_x, btn_y, btn_w, btn_h, 5, fill=1, stroke=0)
-        self.setFont("Helvetica-Bold", 8.5)
-        self.setFillColor(colors.white)
-        self.drawCentredString(PAGE_WIDTH / 2.0, btn_y + 7, "JOIN TELEGRAM: @dailyaffairs25")
+styles.add(ParagraphStyle(
+    name="Question",
+    parent=styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=10,
+    leading=15,
+    textColor=DARK,
+    spaceAfter=5,
+))
 
-        self.setFont("Helvetica-Bold", 8)
-        self.setFillColor(colors.HexColor("#64748b"))
-        self.drawRightString(PAGE_WIDTH - 18, 18, f"{self._pageNumber}/{total_pages}")
-        self.restoreState()
+styles.add(ParagraphStyle(
+    name="BodyCustom",
+    parent=styles["Normal"],
+    fontSize=9,
+    leading=14,
+    textColor=DARK,
+    spaceAfter=5,
+))
 
-class CACanvas(BaseExamCanvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.doc_title = "DAILY CURRENT AFFAIRS (THEORY)"
+styles.add(ParagraphStyle(
+    name="SmallCustom",
+    parent=styles["Normal"],
+    fontSize=8,
+    leading=11,
+    textColor=GREY,
+))
 
-class GKCanvas(BaseExamCanvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.doc_title = "CHAPTER-WISE STATIC GK NOTES"
+styles.add(ParagraphStyle(
+    name="Answer",
+    parent=styles["Normal"],
+    fontSize=9,
+    leading=14,
+    textColor=GREEN,
+    spaceAfter=5,
+))
 
-class PracticeCanvas(BaseExamCanvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.doc_title = "DAILY EXAM DRILL (MATH + REASONING)"
+styles.add(ParagraphStyle(
+    name="WhiteText",
+    parent=styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=10,
+    leading=14,
+    textColor=WHITE,
+    alignment=TA_CENTER,
+))
 
-# ==========================================
-# 2. VECTOR VISUAL ILLUSTRATIONS
-# ==========================================
-def draw_asian_games_gold_winner():
-    d = Drawing(PAGE_WIDTH - 40, 160)
-    w, h = PAGE_WIDTH - 40, 160
-    d.add(Rect(0, 0, w, h, rx=10, ry=10, fillColor=colors.HexColor("#061a40"), strokeColor=None))
-    d.add(Circle(w - 30, 120, 80, fillColor=colors.HexColor("#003554"), fillOpacity=0.5, strokeColor=None))
-    d.add(Line(0, 30, w, 30, strokeColor=colors.HexColor("#ef4444"), strokeWidth=2))
-    d.add(Circle(65, 80, 24, fillColor=colors.HexColor("#eab308"), strokeColor=colors.HexColor("#fef08a"), strokeWidth=2))
-    d.add(Circle(65, 80, 18, fillColor=colors.HexColor("#ca8a04"), strokeColor=None))
-    d.add(String(58, 74, "1st", fontSize=13, fontName="Helvetica-Bold", fillColor=colors.white))
-    d.add(Line(48, 120, 65, 102, strokeColor=colors.HexColor("#1d4ed8"), strokeWidth=5))
-    d.add(Line(82, 120, 65, 102, strokeColor=colors.HexColor("#1d4ed8"), strokeWidth=5))
-    d.add(Circle(135, 110, 12, fillColor=colors.HexColor("#fcd34d"), strokeColor=None))
-    d.add(Polygon([125, 95, 145, 95, 140, 50, 130, 50], fillColor=colors.HexColor("#0284c7"), strokeColor=None))
-    d.add(Line(115, 85, 165, 125, strokeColor=colors.HexColor("#f59e0b"), strokeWidth=3))
-    d.add(Rect(16, 128, 150, 20, rx=10, ry=10, fillColor=colors.HexColor("#ca8a04"), strokeColor=None))
-    d.add(String(24, 134, "ASIAN GAMES GOLD", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.white))
-    d.add(String(180, 85, "NEERAJ CHOPRA", fontSize=15, fontName="Helvetica-Bold", fillColor=colors.white))
-    d.add(String(180, 65, "Men's Javelin Throw • Historic Gold", fontSize=9, fontName="Helvetica", fillColor=colors.HexColor("#cbd5e1")))
-    d.add(String(180, 48, "Season Best Throw: 88.88m", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#facc15")))
-    return d
+def P(text, style="BodyCustom"):
+    return Paragraph(text, styles[style])
 
-def draw_space_mission_art():
-    d = Drawing(PAGE_WIDTH - 40, 160)
-    w, h = PAGE_WIDTH - 40, 160
-    d.add(Rect(0, 0, w, h, rx=10, ry=10, fillColor=colors.HexColor("#0b132b"), strokeColor=None))
-    d.add(Circle(w/2, -180, 250, fillColor=colors.HexColor("#1d4ed8"), strokeColor=colors.HexColor("#38bdf8"), strokeWidth=2))
-    for x, y in [(35, 130), (90, 140), (140, 120), (280, 145), (340, 125)]:
-        d.add(Circle(x, y, 1.5, fillColor=colors.HexColor("#e2e8f0"), strokeColor=None))
-    d.add(Rect(210, 55, 95, 45, rx=3, ry=3, fillColor=colors.HexColor("#e2e8f0"), strokeColor=colors.HexColor("#64748b"), strokeWidth=1))
-    d.add(Polygon([130, 77, 190, 58, 190, 96], fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#94a3b8"), strokeWidth=1))
-    d.add(Line(192, 77, 208, 77, strokeColor=colors.HexColor("#facc15"), strokeWidth=2))
-    d.add(Rect(16, 128, 140, 20, rx=10, ry=10, fillColor=colors.HexColor("#1e293b"), strokeColor=colors.HexColor("#38bdf8"), strokeWidth=1))
-    d.add(String(24, 134, "ISRO SPACE MISSION", fontSize=8.5, fontName="Helvetica-Bold", fillColor=colors.HexColor("#38bdf8")))
-    return d
-
-def draw_banner_card(title, subtitle, badge, bg_color, accent_color):
-    d = Drawing(PAGE_WIDTH - 40, 110)
-    w, h = PAGE_WIDTH - 40, 110
-    d.add(Rect(0, 0, w, h, rx=10, ry=10, fillColor=colors.HexColor(bg_color), strokeColor=None))
-    d.add(Circle(w - 25, 80, 55, fillColor=colors.HexColor(accent_color), fillOpacity=0.25, strokeColor=None))
-    d.add(Rect(16, 75, 150, 20, rx=10, ry=10, fillColor=colors.HexColor(accent_color), strokeColor=None))
-    d.add(String(24, 81, badge, fontSize=8, fontName="Helvetica-Bold", fillColor=colors.white))
-    d.add(String(20, 44, title, fontSize=14, fontName="Helvetica-Bold", fillColor=colors.white))
-    d.add(String(20, 26, subtitle, fontSize=8.5, fontName="Helvetica", fillColor=colors.HexColor("#e2e8f0")))
-    return d
-
-# ==========================================
-# 3. PDF BUILDERS
-# ==========================================
-def build_current_affairs_pdf(filename):
-    doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
-    styles = getSampleStyleSheet()
-    head_style = ParagraphStyle('CAHead', fontName='Helvetica-Bold', fontSize=13.5, leading=17.5, textColor=colors.HexColor('#0f172a'), spaceAfter=8)
-    story = []
-
-    story.append(draw_asian_games_gold_winner())
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("NEERAJ CHOPRA CLINCHES HISTORIC GOLD IN ASIAN GAMES JAVELIN THROW", head_style))
-    sports_points = [
-        ("Achievement", "Neeraj Chopra successfully defended his Asian Games gold medal with a season-best effort of 88.88m."),
-        ("Double Podium", "Kishore Jena secured the silver medal with a personal best of 87.54m, securing India's historic 1-2 finish."),
-        ("Olympic Qualification", "Both athletes confirmed direct qualification for international athletic competitions."),
-        ("Static Sports GK", "First Indian track-and-field athlete to win Olympic gold (Tokyo 2020) and World Athletics Championship gold.")
+def make_banner(title, subtitle, colour):
+    data = [
+        [Paragraph(title, styles["CoverTitle"])],
+        [Paragraph(subtitle, styles["CoverSub"])]
     ]
-    for label, text in sports_points:
-        cell = [Paragraph(f"<font color='#ca8a04'><b>▶ {label}:</b></font> <font color='#334155'>{text}</font>",
-                          ParagraphStyle('P1', fontName='Helvetica', fontSize=9, leading=13.5))]
-        t = Table([cell], colWidths=[PAGE_WIDTH - 40])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#ffffff")),
-            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor("#e2e8f0")),
-            ('LINELEFT', (0,0), (0,-1), 3.5, colors.HexColor("#ca8a04")),
-            ('TOPPADDING', (0,0), (-1,-1), 5), ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING', (0,0), (-1,-1), 10), ('RIGHTPADDING', (0,0), (-1,-1), 10),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 5))
+    table = Table(data, colWidths=[175 * mm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colour),
+        ("BOX", (0, 0), (-1, -1), 0, colour),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, 0), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
+        ("TOPPADDING", (0, 1), (-1, 1), 2),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 16),
+    ]))
+    return table
 
-    story.append(PageBreak())
+def footer(canvas, doc):
+    canvas.saveState()
+    width, height = A4
 
-    story.append(draw_space_mission_art())
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("ISRO COMPLETES GAGANYAAN MODULE SEPARATION TESTS AT VSSC", head_style))
-    space_points = [
-        ("Core Update", "ISRO successfully validated critical separation mechanisms between Crew Module and Service Module."),
-        ("Test Centre", "Conducted under simulated orbital conditions at Vikram Sarabhai Space Centre (VSSC), Thiruvananthapuram."),
-        ("Mission Target", "Crucial clearance ahead of the uncrewed Gaganyaan-1 (G1) test flight carrying robot Vyommitra."),
-        ("Static Anchor", "Crew Module houses astronauts; Service Module provides orbital power, fluids, and propulsion support.")
+    canvas.setFillColor(NAVY)
+    canvas.rect(0, height - 5 * mm, width, 5 * mm, fill=1, stroke=0)
+
+    canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+    canvas.line(18 * mm, 15 * mm, width - 18 * mm, 15 * mm)
+
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(GREY)
+    canvas.drawString(18 * mm, 9 * mm, "DAILY EXAM PREPARATION")
+    canvas.drawRightString(
+        width - 18 * mm, 9 * mm, f"Page {doc.page}"
+    )
+    canvas.restoreState()
+
+def create_pdf(filename, title, subtitle, colour, story):
+    path = os.path.join(OUTPUT_DIR, filename)
+
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=17 * mm,
+        bottomMargin=22 * mm,
+        title=title,
+        author="Daily Exam Preparation"
+    )
+
+    complete_story = [
+        make_banner(title, subtitle, colour),
+        Spacer(1, 7 * mm),
+        P(f"<b>Study date:</b> {TODAY}", "SmallCustom"),
+        Spacer(1, 3 * mm),
     ]
-    for label, text in space_points:
-        cell = [Paragraph(f"<font color='#2563eb'><b>▶ {label}:</b></font> <font color='#334155'>{text}</font>",
-                          ParagraphStyle('P2', fontName='Helvetica', fontSize=9, leading=13.5))]
-        t = Table([cell], colWidths=[PAGE_WIDTH - 40])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#ffffff")),
-            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor("#e2e8f0")),
-            ('LINELEFT', (0,0), (0,-1), 3.5, colors.HexColor("#2563eb")),
-            ('TOPPADDING', (0,0), (-1,-1), 5), ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING', (0,0), (-1,-1), 10), ('RIGHTPADDING', (0,0), (-1,-1), 10),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 5))
+    complete_story.extend(story)
 
-    doc.build(story, canvasmaker=CACanvas)
+    doc.build(
+        complete_story,
+        onFirstPage=footer,
+        onLaterPages=footer
+    )
+    return path
 
-def build_static_gk_pdf(filename):
-    doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
-    story = []
-
-    story.append(draw_banner_card("CHAPTER 1: INDIAN POLITY", "Constitutional Framework & Fundamental Rights", "EXAM STATIC REVISION", "#1e1b4b", "#4f46e5"))
-    story.append(Spacer(1, 10))
-
-    gk_theory = [
-        ("Fundamental Rights (Part III)", "Enshrined in Articles 12 to 35. Known as the Magna Carta of India. Borrowed from USA Bill of Rights."),
-        ("Article 21 (Life & Liberty)", "No person shall be deprived of life or personal liberty except according to procedure established by law. Encompasses Right to Privacy, Internet & Clean Environment."),
-        ("Article 32 (Constitutional Remedies)", "Dr. B.R. Ambedkar called it the 'Heart and Soul of the Constitution'. Supreme Court issues 5 writs: Habeas Corpus, Mandamus, Prohibition, Certiorari, Quo-Warranto."),
-        ("Fundamental Duties (Part IVA)", "Added by 42nd Amendment (1976) on Swaran Singh Committee recommendation. Currently 11 duties under Article 51A.")
+def make_box(title, text, colour, background):
+    content = [
+        P(title, "Question"),
+        P(text)
     ]
-    for title, desc in gk_theory:
-        cell = [
-            Paragraph(f"<b><font color='#4338ca'>{title}</font></b>", ParagraphStyle('G1', fontName='Helvetica-Bold', fontSize=9.5, leading=13)),
-            Spacer(1, 3),
-            Paragraph(f"<font color='#334155'>{desc}</font>", ParagraphStyle('G2', fontName='Helvetica', fontSize=8.5, leading=12.5))
+    table = Table([[content]], colWidths=[174 * mm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), background),
+        ("BOX", (0, 0), (-1, -1), 1, colour),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, colour),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return table
+
+# ==========================================================
+# PDF 1: DAILY CURRENT AFFAIRS
+# Headlines come from RSS feeds. Links are included for
+# checking the original reporting.
+# ==========================================================
+
+def get_current_affairs():
+    feeds = [
+        (
+            "Google News — India",
+            "https://news.google.com/rss/search?q="
+            + quote_plus("India government science technology economy")
+            + "&hl=en-IN&gl=IN&ceid=IN:en"
+        ),
+        (
+            "Google News — Science and Space",
+            "https://news.google.com/rss/search?q="
+            + quote_plus("India science space ISRO environment")
+            + "&hl=en-IN&gl=IN&ceid=IN:en"
+        ),
+        (
+            "Google News — International",
+            "https://news.google.com/rss/search?q="
+            + quote_plus("international news climate technology")
+            + "&hl=en-IN&gl=IN&ceid=IN:en"
+        ),
+    ]
+
+    articles = []
+    seen = set()
+
+    for source_name, url in feeds:
+        try:
+            response = requests.get(
+                url,
+                timeout=20,
+                headers={"User-Agent": "DailyStudyBot/1.0"}
+            )
+            response.raise_for_status()
+            parsed = feedparser.parse(response.content)
+
+            for entry in parsed.entries:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = entry.get("summary", "").strip()
+
+                if not title or not link or title in seen:
+                    continue
+
+                seen.add(title)
+                articles.append({
+                    "title": title,
+                    "link": link,
+                    "summary": summary,
+                    "source": source_name,
+                    "published": entry.get("published", "Date not provided")
+                })
+
+        except Exception as error:
+            print(f"Could not read {source_name}: {error}")
+
+    return articles[:12]
+
+def build_current_affairs():
+    story = [
+        P("TODAY'S NEWS DESK", "Section"),
+        P(
+            "Read the headline, open the source link, and make a short "
+            "note of the event, place, organisation and important numbers."
+        ),
+        Spacer(1, 3 * mm)
+    ]
+
+    articles = get_current_affairs()
+
+    if not articles:
+        story.append(make_box(
+            "Live news feeds unavailable",
+            "The news feeds could not be reached during this run. "
+            "No unverified headlines have been presented as today's news. "
+            "Check the next scheduled run or your internet/feed settings.",
+            ORANGE, PALE_ORANGE
+        ))
+        story.append(Spacer(1, 5 * mm))
+        story.append(P(
+            "Exam tip: Revise recent government schemes, important "
+            "appointments, awards, science and space missions, environment, "
+            "sports and major national and international events."
+        ))
+    else:
+        for i, article in enumerate(articles, 1):
+            title = escape(article["title"])
+            link = escape(article["link"], quote=True)
+            published = escape(article["published"])
+            source = escape(article["source"])
+
+            # RSS summaries may contain HTML. Remove tags for clean PDF text.
+            import re
+            summary = re.sub(r"<[^>]+>", " ", article["summary"])
+            summary = escape(" ".join(summary.split())[:450])
+
+            content = [
+                P(f"{i:02d}. {title}", "Question"),
+                P(f"<b>Feed:</b> {source} &nbsp; | &nbsp; "
+                  f"<b>Published:</b> {published}", "SmallCustom"),
+            ]
+
+            if summary:
+                content.append(P(summary))
+
+            content.append(P(
+                f'<link href="{link}" color="#2563EB">'
+                "<u>Open original news report</u></link>",
+                "BodyCustom"
+            ))
+
+            story.append(KeepTogether(content))
+            story.append(Spacer(1, 4 * mm))
+
+    story.append(Spacer(1, 4 * mm))
+    story.append(make_box(
+        "Daily revision task",
+        "For each important story, write: What happened? Where? Which "
+        "organisation or person was involved? Why is it important for an exam?",
+        BLUE, PALE_BLUE
+    ))
+
+    return create_pdf(
+        "01_Daily_Current_Affairs.pdf",
+        "DAILY CURRENT AFFAIRS",
+        "Fresh headlines • Source links • Exam-oriented reading",
+        BLUE,
+        story
+    )
+
+# ==========================================================
+# PDF 2: STATIC GK
+# Daily chapter rotation with revision notes and MCQs.
+# ==========================================================
+
+GK_CHAPTERS = [
+    {
+        "name": "Indian Constitution",
+        "notes": [
+            ("Constitution adopted", "26 November 1949."),
+            ("Constitution came into force", "26 January 1950."),
+            ("Fundamental Rights", "Part III of the Constitution."),
+            ("Directive Principles", "Part IV of the Constitution."),
+            ("Fundamental Duties", "Part IVA; Article 51A."),
+            ("Constitutional remedies", "Article 32 concerns remedies for enforcement of Fundamental Rights.")
+        ],
+        "questions": [
+            ("When was the Constitution of India adopted?",
+             ["15 August 1947", "26 November 1949", "26 January 1950", "2 October 1950"], 1,
+             "It was adopted by the Constituent Assembly on 26 November 1949."),
+            ("Fundamental Rights are primarily contained in which part?",
+             ["Part I", "Part II", "Part III", "Part IV"], 2,
+             "Part III contains Fundamental Rights."),
+            ("Fundamental Duties are listed under which article?",
+             ["Article 14", "Article 21", "Article 32", "Article 51A"], 3,
+             "Article 51A lists Fundamental Duties.")
         ]
-        t = Table([cell], colWidths=[PAGE_WIDTH - 40])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#ffffff")),
-            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor("#e2e8f0")),
-            ('LINELEFT', (0,0), (0,-1), 3.5, colors.HexColor("#4f46e5")),
-            ('TOPPADDING', (0,0), (-1,-1), 6), ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-            ('LEFTPADDING', (0,0), (-1,-1), 10), ('RIGHTPADDING', (0,0), (-1,-1), 10),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 5))
-
-    doc.build(story, canvasmaker=GKCanvas)
-
-def build_practice_drill_pdf(filename):
-    doc = SimpleDocTemplate(filename, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), leftMargin=20, rightMargin=20, topMargin=68, bottomMargin=110)
-    story = []
-
-    story.append(draw_banner_card("SECTION A: SPEED ARITHMETIC", "Percentages, Profit & Loss and Time-Work", "10-MINUTE DAILY DRILL", "#064e3b", "#059669"))
-    story.append(Spacer(1, 8))
-
-    math_questions = [
-        ("Q1. Percentage & Successive Discount",
-         "A shopkeeper marks an article 40% above cost price and allows a discount of 25%. Find his profit percentage.",
-         "A) 5%     B) 8%     C) 10%     D) 12%",
-         "Sol: Let CP = 100. MP = 140. SP = 140 × 0.75 = 105. Profit% = ((105-100)/100) × 100 = 5% (Ans: A)"),
-        ("Q2. Time and Work",
-         "A can finish a work in 12 days and B in 18 days. If they work together for 4 days, what fraction of work is left?",
-         "A) 5/9     B) 4/9     C) 1/3     D) 2/5",
-         "Sol: 1 day work = 1/12 + 1/18 = 5/36. 4 days work = 4 × 5/36 = 5/9. Remaining = 1 - 5/9 = 4/9 (Ans: B)")
-    ]
-    for q_title, q_text, opts, sol in math_questions:
-        cell = [
-            Paragraph(f"<b><font color='#065f46'>{q_title}</font></b>", ParagraphStyle('M1', fontName='Helvetica-Bold', fontSize=9, leading=12)),
-            Spacer(1, 2),
-            Paragraph(f"<font color='#0f172a'>{q_text}</font>", ParagraphStyle('M2', fontName='Helvetica', fontSize=8.5, leading=12)),
-            Spacer(1, 2),
-            Paragraph(f"<b><font color='#475569'>{opts}</font></b>", ParagraphStyle('M3', fontName='Helvetica', fontSize=8, leading=11)),
-            Spacer(1, 3),
-            Paragraph(f"<b><font color='#059669'>✓ {sol}</font></b>", ParagraphStyle('M4', fontName='Helvetica-Bold', fontSize=8, leading=10.5))
+    },
+    {
+        "name": "Indian Geography",
+        "notes": [
+            ("Standard Meridian of India", "82°30′ East longitude."),
+            ("Tropic of Cancer", "Passes through eight Indian states."),
+            ("Largest Indian state by area", "Rajasthan."),
+            ("Himalayas", "Young fold mountains in northern India."),
+            ("Monsoon", "Seasonal reversal of winds is a key feature."),
+            ("Western Ghats", "A mountain range running roughly parallel to India's western coast.")
+        ],
+        "questions": [
+            ("What is India's Standard Meridian?",
+             ["68°7′ E", "82°30′ E", "90° E", "75° E"], 1,
+             "India's Standard Meridian is 82°30′ E."),
+            ("Which is the largest Indian state by area?",
+             ["Madhya Pradesh", "Uttar Pradesh", "Rajasthan", "Maharashtra"], 2,
+             "Rajasthan is the largest state by area."),
+            ("The Himalayas are mainly which type of mountains?",
+             ["Block", "Volcanic", "Residual", "Fold"], 3,
+             "The Himalayas are young fold mountains.")
         ]
-        t = Table([cell], colWidths=[PAGE_WIDTH - 40])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#ffffff")),
-            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor("#e2e8f0")),
-            ('LINELEFT', (0,0), (0,-1), 3.5, colors.HexColor("#059669")),
-            ('TOPPADDING', (0,0), (-1,-1), 5), ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING', (0,0), (-1,-1), 8), ('RIGHTPADDING', (0,0), (-1,-1), 8),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 4))
-
-    story.append(PageBreak())
-
-    story.append(draw_banner_card("SECTION B: SPEED REASONING", "Puzzles, Syllogisms & Coding-Decoding", "LOGICAL APTITUDE", "#431407", "#ea580c"))
-    story.append(Spacer(1, 8))
-
-    reasoning_questions = [
-        ("Q1. Number Series Analogy",
-         "Find the next term: 6, 25, 62, 123, 214, ?",
-         "A) 341     B) 343     C) 339     D) 342",
-         "Sol: Pattern is n³ - 2: 2³-2=6, 3³-2=25, 4³-2=62, 5³-2=123, 6³-2=214, 7³-2 = 343 - 2 = 341 (Ans: A)"),
-        ("Q2. Syllogism Logic",
-         "Statements: All metals are solids. Some solids are conductors.<br/>Conclusions: I. Some conductors are metals. II. Some conductors are solids.",
-         "A) Only I follows     B) Only II follows     C) Both     D) Neither",
-         "Sol: Direct converse of 'Some solids are conductors' is 'Some conductors are solids'. II follows. (Ans: B)")
-    ]
-    for q_title, q_text, opts, sol in reasoning_questions:
-        cell = [
-            Paragraph(f"<b><font color='#9a3412'>{q_title}</font></b>", ParagraphStyle('R1', fontName='Helvetica-Bold', fontSize=9, leading=12)),
-            Spacer(1, 2),
-            Paragraph(f"<font color='#0f172a'>{q_text}</font>", ParagraphStyle('R2', fontName='Helvetica', fontSize=8.5, leading=12)),
-            Spacer(1, 2),
-            Paragraph(f"<b><font color='#475569'>{opts}</font></b>", ParagraphStyle('R3', fontName='Helvetica', fontSize=8, leading=11)),
-            Spacer(1, 3),
-            Paragraph(f"<b><font color='#ea580c'>✓ {sol}</font></b>", ParagraphStyle('R4', fontName='Helvetica-Bold', fontSize=8, leading=10.5))
+    },
+    {
+        "name": "Indian History",
+        "notes": [
+            ("Battle of Plassey", "1757."),
+            ("Revolt of 1857", "A major uprising against British rule."),
+            ("Indian National Congress founded", "1885."),
+            ("Non-Cooperation Movement", "Launched in 1920."),
+            ("Dandi March", "1930; associated with the Salt Satyagraha."),
+            ("Quit India Movement", "Launched in 1942.")
+        ],
+        "questions": [
+            ("In which year was the Indian National Congress founded?",
+             ["1857", "1885", "1905", "1942"], 1,
+             "The Indian National Congress was founded in 1885."),
+            ("The Dandi March took place in which year?",
+             ["1919", "1920", "1930", "1942"], 2,
+             "The Salt March took place in 1930."),
+            ("The Quit India Movement began in which year?",
+             ["1920", "1930", "1935", "1942"], 3,
+             "The Quit India Movement was launched in 1942.")
         ]
-        t = Table([cell], colWidths=[PAGE_WIDTH - 40])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#ffffff")),
-            ('BOX', (0,0), (-1,-1), 0.75, colors.HexColor("#e2e8f0")),
-            ('LINELEFT', (0,0), (0,-1), 3.5, colors.HexColor("#ea580c")),
-            ('TOPPADDING', (0,0), (-1,-1), 5), ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-            ('LEFTPADDING', (0,0), (-1,-1), 8), ('RIGHTPADDING', (0,0), (-1,-1), 8),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 4))
+    },
+    {
+        "name": "Indian Economy",
+        "notes": [
+            ("RBI", "The Reserve Bank of India is India's central bank."),
+            ("GDP", "Measures the value of final goods and services produced within a country over a period."),
+            ("Inflation", "A sustained increase in the general price level."),
+            ("Repo rate", "The rate at which the RBI lends short-term funds to banks against eligible securities."),
+            ("Direct tax", "A tax paid directly by the person or organisation on whom it is imposed."),
+            ("GST", "Goods and Services Tax is an indirect tax.")
+        ],
+        "questions": [
+            ("Which is India's central bank?",
+             ["SBI", "RBI", "NABARD", "SEBI"], 1,
+             "The Reserve Bank of India is India's central bank."),
+            ("A sustained rise in the general price level is called:",
+             ["Deflation", "Depreciation", "Inflation", "Recession"], 2,
+             "Inflation refers to a rise in the general price level."),
+            ("GST is generally classified as which kind of tax?",
+             ["Direct", "Property", "Income", "Indirect"], 3,
+             "GST is an indirect tax.")
+        ]
+    },
+    {
+        "name": "General Science",
+        "notes": [
+            ("SI unit of force", "Newton."),
+            ("SI unit of power", "Watt."),
+            ("Photosynthesis", "Plants use light energy to produce chemical energy."),
+            ("Vitamin C deficiency", "Can cause scurvy."),
+            ("Blood oxygen transport", "Haemoglobin in red blood cells transports much of the oxygen."),
+            ("Speed of light in vacuum", "Approximately 3 × 10⁸ m/s.")
+        ],
+        "questions": [
+            ("What is the SI unit of force?",
+             ["Joule", "Newton", "Watt", "Pascal"], 1,
+             "Force is measured in newtons."),
+            ("Deficiency of vitamin C can cause:",
+             ["Rickets", "Night blindness", "Scurvy", "Beriberi"], 2,
+             "Vitamin C deficiency can cause scurvy."),
+            ("What is the approximate speed of light in vacuum?",
+             ["3 × 10⁶ m/s", "3 × 10⁷ m/s", "3 × 10⁹ m/s", "3 × 10⁸ m/s"], 3,
+             "The speed of light in vacuum is approximately 3 × 10⁸ m/s.")
+        ]
+    },
+]
 
-    doc.build(story, canvasmaker=PracticeCanvas)
+def build_static_gk():
+    chapter = GK_CHAPTERS[(DAY_NUMBER - 1) % len(GK_CHAPTERS)]
+    story = [
+        P("CHAPTER OF THE DAY", "Section"),
+        make_box(
+            chapter["name"].upper(),
+            "Read these quick facts, then answer the MCQs without looking at the answers.",
+            PURPLE, PALE_PURPLE
+        ),
+        Spacer(1, 5 * mm),
+        P("QUICK REVISION NOTES", "Section")
+    ]
 
-# ==========================================
-# 4. TELEGRAM SENDER
-# ==========================================
-def send_telegram_doc(pdf_path, caption_text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    with open(pdf_path, 'rb') as f:
-        files = {'document': f}
-        data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': caption_text, 'parse_mode': 'Markdown'}
-        resp = requests.post(url, files=files, data=data)
-    print(f"Sent {pdf_path}: {resp.status_code}")
-    if resp.status_code != 200:
-        raise RuntimeError(f"Error posting {pdf_path}: {resp.text}")
+    for title, text in chapter["notes"]:
+        story.append(make_box(title, text, PURPLE, PALE_PURPLE))
+        story.append(Spacer(1, 2 * mm))
 
-if __name__ == "__main__":
-    today = datetime.now().strftime("%d_%b_%Y")
-    
-    # 1. Build and send Current Affairs PDF
-    ca_pdf = f"1_Daily_Current_Affairs_Theory_{today}.pdf"
-    build_current_affairs_pdf(ca_pdf)
-    send_telegram_doc(ca_pdf, f"📑 *[1/3] Daily Current Affairs Theory & Sports Capsule*\n🗓 Date: {datetime.now().strftime('%d %B %Y')}\nIncludes Asian Games champion analysis & space updates.")
+    story.extend([
+        Spacer(1, 4 * mm),
+        P("PRACTICE MCQs", "Section")
+    ])
 
-    # 2. Build and send Static GK PDF
-    gk_pdf = f"2_Static_GK_Chapter_Notes_{today}.pdf"
-    build_static_gk_pdf(gk_pdf)
-    send_telegram_doc(gk_pdf, f"🏛️ *[2/3] Chapter-Wise Static GK Notes*\nTopic: Indian Polity • Fundamental Rights (Articles 12-35)")
+    for i, (question, options, answer, explanation) in enumerate(
+        chapter["questions"], 1
+    ):
+        option_text = "<br/>".join(
+            f"{chr(65+j)}. {escape(option)}"
+            for j, option in enumerate(options)
+        )
+        story.append(P(f"Q{i}. {escape(question)}", "Question"))
+        story.append(P(option_text))
+        story.append(Spacer(1, 3 * mm))
 
-    # 3. Build and send Practice Drill PDF
-    drill_pdf = f"3_Daily_Practice_Drill_Math_Reasoning_{today}.pdf"
-    build_practice_drill_pdf(drill_pdf)
-    send_telegram_doc(drill_pdf, f"🎯 *[3/3] Daily Exam Practice Drill*\nQuantitative Arithmetic + Speed Reasoning + Complete Solutions")
-    
+    story.extend([
+        PageBreak(),
+        P("ANSWER KEY WITH EXPLANATIONS", "Section")
+    ])
+
+    for i, (question, options, answer, explanation) in enumerate(
+        chapter["questions"], 1
+    ):
+        story.append(P(
+            f"Q{i}. Answer: {chr(65+answer)}. {escape(options[answer])}",
+            "Answer"
+        ))
+        story.append(P(escape(explanation)))
+        story.append(Spacer(1, 3 * mm))
+
+    return create_pdf(
+        "02_Static_GK.pdf",
+        "STATIC GK",
+        f"Chapter-wise revision • {chapter['name']} • MCQs",
+        PURPLE,
+        story
+    )
+
+# ==========================================================
+# PDF 3: REASONING PRACTICE
+# ==========================================================
+
+REASONING_QUESTIONS = [
+    {
+        "topic": "Number series",
+        "level": "Easy",
+        "q": "Find the next number: 3, 6, 12, 24, ?",
+        "options": ["30", "36", "48", "60"],
+        "answer": 2,
+        "solution": "Each number is multiplied by 2. Therefore, 24 × 2 = 48."
+    },
+    {
+        "topic": "Number series",
+        "level": "Medium",
+        "q": "Find the missing number: 2, 6, 12, 20, 30, ?",
+        "options": ["36", "40", "42", "44"],
+        "answer": 2,
+        "solution": "The differences are 4, 6, 8 and 10. The next difference is 12, so 30 + 12 = 42."
+    },
+    {
+        "topic": "Analogy",
+        "level": "Easy",
+        "q": "Book is to Reading as Fork is to:",
+        "options": ["Writing", "Eating", "Drawing", "Sleeping"],
+        "answer": 1,
+        "solution": "A book is used for reading; a fork is used for eating."
+    },
+    {
+        "topic": "Coding-decoding",
+        "level": "Medium",
+        "q": "If CAT is coded as DBU by moving every letter one step forward, DOG becomes:",
+        "options": ["EPH", "EOG", "FPH", "DPH"],
+        "answer": 0,
+        "solution": "D → E, O → P and G → H. Therefore, DOG becomes EPH."
+    },
+    {
+        "topic": "Odd one out",
+        "level": "Easy",
+        "q": "Choose the odd one out.",
+        "options": ["Square", "Triangle", "Circle", "Cube"],
+        "answer": 3,
+        "solution": "Cube is three-dimensional; the other figures are two-dimensional."
+    },
+    {
+        "topic": "Direction sense",
+        "level": "Medium",
+        "q": "A person walks 4 m north and then 3 m east. How far is the person from the starting point?",
+        "options": ["5 m", "7 m", "1 m", "12 m"],
+        "answer": 0,
+        "solution": "The path forms a right triangle. Distance = √(4² + 3²) = √25 = 5 m."
+    },
+    {
+        "topic": "Blood relation",
+        "level": "Easy",
+        "q": "A is the brother of B. B is the sister of C. How is A related to C?",
+        "options": ["Brother", "Father", "Uncle", "Cousin"],
+        "answer": 0,
+        "solution": "A and C are siblings, and A is male. Therefore, A is C's brother."
+    },
+    {
+        "topic": "Alphabet series",
+        "level": "Medium",
+        "q": "Find the next letter: A, C, F, J, O, ?",
+        "options": ["S", "T", "U", "V"],
+        "answer": 2,
+        "solution": "Letter jumps are +2, +3, +4 and +5. The next jump is +6, giving U."
+    },
+]
+
+def build_reasoning():
+    rng = random.Random
