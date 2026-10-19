@@ -7,7 +7,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, String, Circle, Polygon, Line
 
-TELEGRAM_BOT_TOKEN = "8395103968:AAH_HQI9IANzBtPfOUczQ4V05PyjoEYfsK4"
+TELEGRAM_BOT_TOKEN = "8395103968:AAH_HQI9IANzBTpFOUczQ4VO5PyjoEYfsK4"
 TELEGRAM_CHAT_ID = "-1004360405775"
 
 PAGE_WIDTH = 450
