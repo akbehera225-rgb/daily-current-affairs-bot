@@ -41,7 +41,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # Change this if your account does not have access to this model.
 GEMINI_MODEL = os.environ.get(
     "GEMINI_MODEL",
-    "gemini-2.5-flash"
+    "gemini-3.8-flash"
 )
 
 OUTPUT_DIR = "daily_pdfs"
