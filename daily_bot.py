@@ -8,6 +8,7 @@ import html
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from xml.etree import ElementTree
+from openai import OpenAI
 
 import requests
 import feedparser
