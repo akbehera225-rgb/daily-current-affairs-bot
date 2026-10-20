@@ -2,3 +2,4 @@ reportlab
 requests
 feedparser
 google-genai
+openai
