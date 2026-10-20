@@ -1,1273 +1,845 @@
-import os
+          import os
 import re
-import json
 import html
+import random
 import logging
-import calendar
-from datetime import datetime
-from pathlib import Path
-from urllib.parse import quote
+from datetime import datetime, timezone, timedelta
+from urllib.parse import quote_plus
 
 import requests
 import feedparser
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    PageBreak,
-    KeepTogether,
-)
-from xml.sax.saxutils import escape
-
-
-# ==========================================================
-# CONFIGURATION
-# ==========================================================
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# Change this if your Google AI Studio account uses a
-# different available model.
-GEMINI_MODEL = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-3.8-flash"
+    SimpleDocTemplate, Paragraph, Spacer, Table,
+    TableStyle, PageBreak, KeepTogether
 )
 
-OUTPUT_DIR = Path("daily_pdfs")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# =============== SETTINGS ===============
 
-TODAY = datetime.now().astimezone()
-TODAY_TEXT = TODAY.strftime("%d %B %Y")
-DATE_KEY = TODAY.strftime("%Y-%m-%d")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+if not BOT_TOKEN or not CHAT_ID:
+    raise RuntimeError(
+        "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID "
+        "in GitHub Actions Secrets."
+    )
+
+IST = timezone(timedelta(hours=5, minutes=30))
+NOW = datetime.now(IST)
+TODAY = NOW.strftime("%d %B %Y")
+DAY = NOW.timetuple().tm_yday
+
+os.makedirs("daily_pdfs", exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(levelname)s: %(message)s"
 )
+log = logging.getLogger("daily_bot")
 
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "DailyStudyBot/2.0"
-})
+NAVY = colors.HexColor("#172554")
+BLUE = colors.HexColor("#2563EB")
+PURPLE = colors.HexColor("#7C3AED")
+TEAL = colors.HexColor("#0F766E")
+ORANGE = colors.HexColor("#C2410C")
+GREEN = colors.HexColor("#15803D")
+PALE_BLUE = colors.HexColor("#EFF6FF")
+PALE_PURPLE = colors.HexColor("#F5F3FF")
+PALE_TEAL = colors.HexColor("#F0FDFA")
+PALE_ORANGE = colors.HexColor("#FFF7ED")
+DARK = colors.HexColor("#1E293B")
+GREY = colors.HexColor("#64748B")
+WHITE = colors.white
+
+styles = getSampleStyleSheet()
+
+styles.add(ParagraphStyle(
+    name="BannerTitle",
+    parent=styles["Title"],
+    fontName="Helvetica-Bold",
+    fontSize=19,
+    leading=23,
+    textColor=WHITE,
+    alignment=TA_CENTER
+))
+
+styles.add(ParagraphStyle(
+    name="BannerSub",
+    parent=styles["Normal"],
+    fontSize=9,
+    leading=12,
+    textColor=WHITE,
+    alignment=TA_CENTER
+))
+
+styles.add(ParagraphStyle(
+    name="SectionX",
+    parent=styles["Heading2"],
+    fontSize=14,
+    leading=18,
+    textColor=NAVY,
+    spaceBefore=8,
+    spaceAfter=7
+))
+
+styles.add(ParagraphStyle(
+    name="QX",
+    parent=styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=9,
+    leading=12,
+    textColor=DARK,
+    spaceAfter=4
+))
+
+styles.add(ParagraphStyle(
+    name="BodyX",
+    parent=styles["Normal"],
+    fontSize=8.5,
+    leading=11.5,
+    textColor=DARK,
+    spaceAfter=3
+))
+
+styles.add(ParagraphStyle(
+    name="SmallX",
+    parent=styles["Normal"],
+    fontSize=7.5,
+    leading=10,
+    textColor=GREY
+))
+
+styles.add(ParagraphStyle(
+    name="AnswerX",
+    parent=styles["Normal"],
+    fontName="Helvetica-Bold",
+    fontSize=8.5,
+    leading=11.5,
+    textColor=GREEN
+))
 
 
-# ==========================================================
-# TOPIC ROTATION
-# ==========================================================
-
-STATIC_GK_TOPICS = [
-    "Indian History",
-    "Indian and World Geography",
-    "Indian Constitution and Polity",
-    "Indian Economy",
-    "General Science"
-]
-
-ARITHMETIC_TOPICS = [
-    "Percentage and Ratio",
-    "Profit, Loss and Discount",
-    "Average and Mixture",
-    "Time and Work",
-    "Speed, Time and Distance",
-    "Simple and Compound Interest",
-    "Number System and Simplification",
-    "Mensuration"
-]
-
-day_number = TODAY.timetuple().tm_yday
-
-GK_TOPIC = STATIC_GK_TOPICS[
-    (day_number - 1) % len(STATIC_GK_TOPICS)
-]
-
-ARITHMETIC_TOPIC = ARITHMETIC_TOPICS[
-    (day_number - 1) % len(ARITHMETIC_TOPICS)
-]
+def safe_text(value):
+    value = html.escape(str(value or ""), quote=False)
+    return value.replace("\n", " ")
 
 
-# ==========================================================
-# GEMINI API
-# ==========================================================
+def para(text, style="BodyX"):
+    return Paragraph(text, styles[style])
 
-def gemini_generate(prompt, max_tokens=12000):
-    """
-    Generate content using the Gemini Developer API.
-    Returns the model's text response.
-    """
 
-    if not GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY is missing from GitHub Secrets."
-        )
-
-    url = (
-        "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{GEMINI_MODEL}:generateContent"
+def banner(title, subtitle, colour):
+    table = Table(
+        [[para(safe_text(title), "BannerTitle")],
+         [para(safe_text(subtitle), "BannerSub")]],
+        colWidths=[174 * mm]
     )
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.65,
-            "maxOutputTokens": max_tokens,
-            "responseMimeType": "application/json"
-        }
-    }
-
-    response = session.post(
-        url,
-        params={"key": GEMINI_API_KEY},
-        json=payload,
-        timeout=180
-    )
-
-    if response.status_code != 200:
-        # Do not print the request URL because it contains the key.
-        logging.error(
-            "Gemini API returned HTTP %s: %s",
-            response.status_code,
-            response.text[:1000]
-        )
-
-        if response.status_code == 429:
-            raise RuntimeError(
-                "Gemini API rate limit or quota reached."
-            )
-
-        if response.status_code in (401, 403):
-            raise RuntimeError(
-                "Gemini API authentication or permission failed. "
-                "Check the API key and model access."
-            )
-
-        raise RuntimeError(
-            f"Gemini API failed with HTTP {response.status_code}."
-        )
-
-    data = response.json()
-
-    candidates = data.get("candidates", [])
-
-    if not candidates:
-        raise RuntimeError(
-            "Gemini returned no usable response."
-        )
-
-    parts = (
-        candidates[0]
-        .get("content", {})
-        .get("parts", [])
-    )
-
-    text_parts = [
-        part.get("text", "")
-        for part in parts
-        if part.get("text")
-    ]
-
-    result = "\n".join(text_parts).strip()
-
-    if not result:
-        raise RuntimeError(
-            "Gemini returned an empty response."
-        )
-
-    return result
-
-
-def parse_json_response(text):
-    """
-    Parse JSON, including a response accidentally wrapped
-    in Markdown code fences.
-    """
-
-    cleaned = text.strip()
-
-    cleaned = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        cleaned,
-        flags=re.IGNORECASE
-    )
-
-    cleaned = re.sub(
-        r"\s*```$",
-        "",
-        cleaned
-    )
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting a JSON object from surrounding text.
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-
-    if start != -1 and end > start:
-        return json.loads(cleaned[start:end + 1])
-
-    raise ValueError(
-        "Gemini did not return valid JSON."
-    )
-
-
-# ==========================================================
-# NEWS COLLECTION
-# ==========================================================
-
-def fetch_current_news():
-    """
-    Collect recent news from Google News RSS.
-    RSS headlines and source links are preserved.
-    """
-
-    queries = [
-        "India government science economy education when:7d",
-        "India national news current affairs when:7d"
-    ]
-
-    articles = []
-    seen_links = set()
-
-    for query in queries:
-        rss_url = (
-            "https://news.google.com/rss/search?q="
-            + quote(query)
-            + "&hl=en-IN&gl=IN&ceid=IN:en"
-        )
-
-        try:
-            feed = feedparser.parse(rss_url)
-
-            for entry in feed.entries:
-                link = entry.get("link", "").strip()
-                title = entry.get("title", "").strip()
-
-                if not title or not link:
-                    continue
-
-                if link in seen_links:
-                    continue
-
-                seen_links.add(link)
-
-                published = entry.get(
-                    "published",
-                    TODAY_TEXT
-                )
-
-                summary = entry.get(
-                    "summary",
-                    ""
-                )
-
-                # Remove HTML markup from RSS descriptions.
-                summary = re.sub(
-                    r"<[^>]+>",
-                    " ",
-                    summary
-                )
-
-                summary = html.unescape(summary)
-                summary = re.sub(
-                    r"\s+",
-                    " ",
-                    summary
-                ).strip()
-
-                source = ""
-
-                source_info = entry.get("source", {})
-
-                if isinstance(source_info, dict):
-                    source = source_info.get(
-                        "title",
-                        ""
-                    )
-
-                articles.append({
-                    "title": title,
-                    "date": published,
-                    "source": source,
-                    "link": link,
-                    "description": summary
-                })
-
-        except Exception:
-            logging.exception(
-                "Could not read one RSS news feed."
-            )
-
-    # Avoid duplicate articles.
-    return articles[:20]
-
-
-def summarize_news(articles):
-    """
-    Produce readable summaries based on supplied RSS content.
-    Headlines and links remain tied to the original sources.
-    """
-
-    if not articles:
-        return []
-
-    prompt = f"""
-You are preparing an Indian competitive-exam current affairs
-digest for {TODAY_TEXT}.
-
-The supplied records are news collected from RSS feeds.
-
-Return ONLY valid JSON in this format:
-
-{{
-  "items": [
-    {{
-      "summary": "A concise, factual summary in 2-3 sentences."
-    }}
-  ]
-}}
-
-Rules:
-1. Return exactly one summary for each supplied record.
-2. Preserve the original order.
-3. Use only facts supported by the supplied headline
-   and description.
-4. Never invent dates, numbers, names, or events.
-5. If details are insufficient, say only what the headline
-   supports.
-6. Use clear English suitable for Indian competitive exams.
-7. Do not invent exam facts or give political opinions.
-
-NEWS RECORDS:
-{json.dumps(articles, ensure_ascii=False)}
-"""
-
-    try:
-        raw = gemini_generate(
-            prompt,
-            max_tokens=6000
-        )
-
-        data = parse_json_response(raw)
-
-        summaries = data.get("items", [])
-
-        for index, article in enumerate(articles):
-            if index < len(summaries):
-                article["ai_summary"] = summaries[index].get(
-                    "summary",
-                    article["description"]
-                )
-            else:
-                article["ai_summary"] = article["description"]
-
-    except Exception:
-        logging.exception(
-            "AI news summaries failed; using RSS descriptions."
-        )
-
-        for article in articles:
-            article["ai_summary"] = (
-                article["description"]
-                or "See the linked source for further details."
-            )
-
-    return articles
-
-
-# ==========================================================
-# QUESTION GENERATION
-# ==========================================================
-
-def generate_question_batch(
-    subject,
-    topic,
-    start_number,
-    count=25
-):
-    """
-    Generate a batch of MCQs with answers and explanations.
-
-    Smaller batches reduce the risk of responses being
-    truncated when generating detailed solutions.
-    """
-
-    if subject == "Static GK":
-        subject_instructions = """
-Create accurate competitive-exam general knowledge questions.
-Focus on established facts, standard exam knowledge and
-unambiguous answers.
-Avoid obscure facts and disputed claims.
-"""
-
-    elif subject == "Reasoning":
-        subject_instructions = """
-Create logical reasoning MCQs suitable for Indian competitive
-examinations.
-
-Use a varied selection appropriate to the topic, such as:
-analogy, classification, number series, alphabet series,
-coding-decoding, directions, blood relations, ranking,
-syllogisms, and logical patterns.
-
-Every question must have exactly one correct option.
-Make sure each puzzle contains enough information to solve it.
-Explain the reasoning step by step.
-"""
-
-    else:
-        subject_instructions = """
-Create arithmetic MCQs suitable for Indian competitive
-examinations.
-
-Include formulas, calculations, shortcuts where appropriate,
-and step-by-step worked solutions.
-
-Verify all calculations and ensure the stated correct option
-matches the actual answer.
-Use clear numbers and unambiguous units.
-"""
-
-    prompt = f"""
-You are an experienced Indian competitive-exam question setter.
-
-DATE: {TODAY_TEXT}
-SUBJECT: {subject}
-TOPIC: {topic}
-QUESTION NUMBERS: {start_number} to {start_number + count - 1}
-
-{subject_instructions}
-
-Return ONLY valid JSON with this exact structure:
-
-{{
-  "questions": [
-    {{
-      "question": "Full question text",
-      "options": {{
-        "A": "First option",
-        "B": "Second option",
-        "C": "Third option",
-        "D": "Fourth option"
-      }},
-      "answer": "A",
-      "explanation": "Detailed explanation of the correct answer.",
-      "formula": "Relevant formula or method, or an empty string."
-    }}
-  ]
-}}
-
-STRICT RULES:
-1. Generate exactly {count} questions.
-2. Every question must have exactly four options: A, B, C, D.
-3. The answer field must contain only A, B, C or D.
-4. The correct answer must actually match the selected option.
-5. Do not repeat questions within this batch.
-6. Avoid unnecessarily repetitive templates.
-7. Explanations must teach the learner, not merely repeat the answer.
-8. For arithmetic, show the calculation and formula where useful.
-9. For reasoning, explain the logical steps.
-10. For Static GK, explain why the answer is correct.
-11. Do not include questions outside the specified topic.
-12. Do not include Markdown or text outside the JSON.
-13. Use clear English.
-14. Create a varied set for the specified date.
-"""
-
-    raw = gemini_generate(
-        prompt,
-        max_tokens=12000
-    )
-
-    data = parse_json_response(raw)
-
-    questions = data.get("questions", [])
-
-    if not isinstance(questions, list):
-        raise ValueError(
-            f"{subject}: questions must be a list."
-        )
-
-    if len(questions) != count:
-        raise ValueError(
-            f"{subject}: expected {count} questions, "
-            f"received {len(questions)}."
-        )
-
-    validated = []
-
-    for index, question in enumerate(questions):
-        if not isinstance(question, dict):
-            raise ValueError(
-                f"{subject}: invalid question at position {index + 1}."
-            )
-
-        text = str(question.get("question", "")).strip()
-        options = question.get("options", {})
-        answer = str(
-            question.get("answer", "")
-        ).strip().upper()
-
-        explanation = str(
-            question.get("explanation", "")
-        ).strip()
-
-        formula = str(
-            question.get("formula", "")
-        ).strip()
-
-        if not text or not explanation:
-            raise ValueError(
-                f"{subject}: missing question or explanation."
-            )
-
-        if not isinstance(options, dict):
-            raise ValueError(
-                f"{subject}: invalid options."
-            )
-
-        options = {
-            letter: str(options.get(letter, "")).strip()
-            for letter in ("A", "B", "C", "D")
-        }
-
-        if not all(options.values()):
-            raise ValueError(
-                f"{subject}: one or more options are missing."
-            )
-
-        if answer not in ("A", "B", "C", "D"):
-            raise ValueError(
-                f"{subject}: invalid answer key."
-            )
-
-        validated.append({
-            "question": text,
-            "options": options,
-            "answer": answer,
-            "explanation": explanation,
-            "formula": formula
-        })
-
-    return validated
-
-
-def generate_questions(subject, topic, total=50):
-    """
-    Generate 50 questions using two batches of 25.
-    """
-
-    result = []
-
-    for start in range(1, total + 1, 25):
-        count = min(25, total - start + 1)
-
-        logging.info(
-            "Generating %s questions %s-%s...",
-            subject,
-            start,
-            start + count - 1
-        )
-
-        batch = generate_question_batch(
-            subject=subject,
-            topic=topic,
-            start_number=start,
-            count=count
-        )
-
-        result.extend(batch)
-
-    if len(result) != total:
-        raise RuntimeError(
-            f"{subject}: expected {total} questions; "
-            f"got {len(result)}."
-        )
-
-    return result
-
-
-# ==========================================================
-# PDF DESIGN
-# ==========================================================
-
-def make_styles():
-    styles = getSampleStyleSheet()
-
-    styles.add(ParagraphStyle(
-        name="CoverTitle",
-        parent=styles["Title"],
-        fontName="Helvetica-Bold",
-        fontSize=23,
-        leading=29,
-        alignment=TA_CENTER,
-        textColor=colors.HexColor("#17365D"),
-        spaceAfter=8
-    ))
-
-    styles.add(ParagraphStyle(
-        name="SubtitleCustom",
-        parent=styles["Normal"],
-        fontSize=10,
-        leading=15,
-        alignment=TA_CENTER,
-        textColor=colors.HexColor("#526579"),
-        spaceAfter=14
-    ))
-
-    styles.add(ParagraphStyle(
-        name="SectionCustom",
-        parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
-        fontSize=15,
-        leading=19,
-        textColor=colors.HexColor("#17365D"),
-        spaceBefore=8,
-        spaceAfter=9
-    ))
-
-    styles.add(ParagraphStyle(
-        name="QuestionCustom",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=10.5,
-        leading=15,
-        spaceBefore=7,
-        spaceAfter=5
-    ))
-
-    styles.add(ParagraphStyle(
-        name="OptionCustom",
-        parent=styles["Normal"],
-        fontSize=9.5,
-        leading=13,
-        leftIndent=10,
-        spaceAfter=2
-    ))
-
-    styles.add(ParagraphStyle(
-        name="ExplanationCustom",
-        parent=styles["Normal"],
-        fontSize=9.5,
-        leading=14,
-        leftIndent=5,
-        spaceAfter=8
-    ))
-
-    styles.add(ParagraphStyle(
-        name="NewsTitle",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=11,
-        leading=15,
-        textColor=colors.HexColor("#17365D"),
-        spaceAfter=4
-    ))
-
-    styles.add(ParagraphStyle(
-        name="SmallCustom",
-        parent=styles["Normal"],
-        fontSize=8.5,
-        leading=12,
-        textColor=colors.HexColor("#555555")
-    ))
-
-    return styles
-
-
-STYLES = make_styles()
-
-
-def safe_paragraph(text, style):
-    """
-    Escape text before passing it to ReportLab's Paragraph.
-    """
-
-    return Paragraph(
-        escape(str(text)).replace("\n", "<br/>"),
-        style
-    )
-
-
-def add_page_design(canvas, doc):
-    """
-    Add a coloured header and footer to every page.
-    """
-
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colour),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, 0), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
+        ("TOPPADDING", (0, 1), (-1, 1), 2),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 12),
+    ]))
+
+    return table
+
+
+def footer(canvas, doc):
     canvas.saveState()
+    width, height = A4
 
-    page_width, page_height = A4
+    canvas.setFillColor(NAVY)
+    canvas.rect(0, height - 4 * mm, width, 4 * mm, fill=1, stroke=0)
 
-    canvas.setFillColor(
-        colors.HexColor("#17365D")
-    )
+    canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+    canvas.line(18 * mm, 14 * mm, width - 18 * mm, 14 * mm)
 
-    canvas.rect(
-        0,
-        page_height - 10 * mm,
-        page_width,
-        10 * mm,
-        fill=1,
-        stroke=0
-    )
-
-    canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 8.5)
-
-    canvas.drawString(
-        15 * mm,
-        page_height - 6.5 * mm,
-        "DAILY STUDY HUB"
-    )
-
-    canvas.setStrokeColor(
-        colors.HexColor("#D9E2F3")
-    )
-
-    canvas.line(
-        15 * mm,
-        14 * mm,
-        page_width - 15 * mm,
-        14 * mm
-    )
-
-    canvas.setFillColor(
-        colors.HexColor("#526579")
-    )
-
-    canvas.setFont("Helvetica", 8)
-
-    canvas.drawString(
-        15 * mm,
-        9 * mm,
-        f"Generated: {TODAY_TEXT}"
-    )
-
-    canvas.drawRightString(
-        page_width - 15 * mm,
-        9 * mm,
-        f"Page {doc.page}"
-    )
+    canvas.setFont("Helvetica", 7.5)
+    canvas.setFillColor(GREY)
+    canvas.drawString(18 * mm, 8 * mm, "DAILY EXAM PRACTICE")
+    canvas.drawRightString(width - 18 * mm, 8 * mm, f"Page {doc.page}")
 
     canvas.restoreState()
 
 
-def build_pdf(filename, title, subtitle, story):
-    path = OUTPUT_DIR / filename
+def make_pdf(filename, title, subtitle, colour, content):
+    path = os.path.join("daily_pdfs", filename)
 
     doc = SimpleDocTemplate(
-        str(path),
+        path,
         pagesize=A4,
-        rightMargin=16 * mm,
-        leftMargin=16 * mm,
-        topMargin=18 * mm,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=14 * mm,
         bottomMargin=20 * mm,
-        title=title,
-        author="Daily Study Bot"
+        title=title
     )
 
-    full_story = [
+    story = [
+        banner(title, subtitle, colour),
         Spacer(1, 5 * mm),
-        Paragraph(title, STYLES["CoverTitle"]),
-        Paragraph(subtitle, STYLES["SubtitleCustom"]),
-        Spacer(1, 2 * mm),
-    ]
+        para(f"<b>Date:</b> {safe_text(TODAY)}", "SmallX"),
+        Spacer(1, 2 * mm)
+    ] + content
 
-    full_story.extend(story)
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
-    doc.build(
-        full_story,
-        onFirstPage=add_page_design,
-        onLaterPages=add_page_design
-    )
-
-    logging.info("Created PDF: %s", path)
-
+    log.info("Created %s", path)
     return path
 
 
-# ==========================================================
-# CURRENT AFFAIRS PDF
-# ==========================================================
-
-def create_current_affairs_pdf():
-    articles = fetch_current_news()
-
-    if not articles:
-        raise RuntimeError(
-            "No current-affairs news could be retrieved."
-        )
-
-    articles = summarize_news(articles)
-
-    story = [
-        Paragraph(
-            "Today's Current Affairs",
-            STYLES["SectionCustom"]
-        ),
-        safe_paragraph(
-            "Read the news summaries and open the original "
-            "source links for further details.",
-            STYLES["Normal"]
-        ),
-        Spacer(1, 8)
+def info_box(title, body, border, background):
+    inner = [
+        para(safe_text(title), "QX"),
+        para(body, "BodyX")
     ]
 
-    for number, article in enumerate(articles, start=1):
-        title = article.get("title", "News item")
-        date = article.get("date", TODAY_TEXT)
-        source = article.get("source", "")
-        summary = article.get(
-            "ai_summary",
-            article.get("description", "")
-        )
-        link = article.get("link", "")
+    table = Table([[inner]], colWidths=[174 * mm])
 
-        if not summary:
-            summary = (
-                "Open the original source for more information."
-            )
-
-        block = [
-            Paragraph(
-                f"{number}. {escape(title)}",
-                STYLES["NewsTitle"]
-            ),
-            safe_paragraph(
-                f"Date: {date}",
-                STYLES["SmallCustom"]
-            ),
-        ]
-
-        if source:
-            block.append(
-                safe_paragraph(
-                    f"Source: {source}",
-                    STYLES["SmallCustom"]
-                )
-            )
-
-        block.append(
-            safe_paragraph(
-                summary,
-                STYLES["Normal"]
-            )
-        )
-
-        if link:
-            safe_url = html.escape(link, quote=True)
-
-            block.append(
-                Paragraph(
-                    f'<link href="{safe_url}" '
-                    'color="#0563C1">Open original news article</link>',
-                    STYLES["SmallCustom"]
-                )
-            )
-
-        block.append(Spacer(1, 10))
-
-        story.append(
-            KeepTogether(block)
-        )
-
-    return build_pdf(
-        "01_Daily_Current_Affairs.pdf",
-        "CURRENT AFFAIRS",
-        f"Daily News Digest | {TODAY_TEXT}",
-        story
-    )
-
-
-# ==========================================================
-# MCQ PDF
-# ==========================================================
-
-def create_mcq_pdf(
-    filename,
-    title,
-    subtitle,
-    questions
-):
-    story = []
-
-    story.append(
-        Paragraph(
-            "Instructions",
-            STYLES["SectionCustom"]
-        )
-    )
-
-    story.append(
-        safe_paragraph(
-            "Attempt all questions before checking the answer "
-            "key and explanations at the end.",
-            STYLES["Normal"]
-        )
-    )
-
-    story.append(Spacer(1, 8))
-
-    # Questions first: no answers shown in this section.
-    story.append(
-        Paragraph(
-            "PART A — QUESTIONS",
-            STYLES["SectionCustom"]
-        )
-    )
-
-    for index, item in enumerate(questions, start=1):
-        block = [
-            Paragraph(
-                f"Q{index}. {escape(item['question'])}",
-                STYLES["QuestionCustom"]
-            )
-        ]
-
-        for letter in ("A", "B", "C", "D"):
-            option_text = item["options"][letter]
-
-            block.append(
-                Paragraph(
-                    f"<b>{letter}.</b> {escape(option_text)}",
-                    STYLES["OptionCustom"]
-                )
-            )
-
-        block.append(Spacer(1, 5))
-
-        story.append(
-            KeepTogether(block)
-        )
-
-    # Answers and solutions start after the question section.
-    story.append(PageBreak())
-
-    story.append(
-        Paragraph(
-            "PART B — ANSWER KEY",
-            STYLES["SectionCustom"]
-        )
-    )
-
-    answer_rows = [
-        [
-            safe_paragraph("<b>Question</b>", STYLES["SmallCustom"]),
-            safe_paragraph("<b>Answer</b>", STYLES["SmallCustom"])
-        ]
-    ]
-
-    for index, item in enumerate(questions, start=1):
-        answer_rows.append([
-            str(index),
-            item["answer"]
-        ])
-
-    answer_table = Table(
-        answer_rows,
-        colWidths=[35 * mm, 35 * mm],
-        repeatRows=1
-    )
-
-    answer_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0),
-         colors.HexColor("#D9EAF7")),
-        ("TEXTCOLOR", (0, 0), (-1, 0),
-         colors.HexColor("#17365D")),
-        ("GRID", (0, 0), (-1, -1), 0.4,
-         colors.HexColor("#CCD6E0")),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("FONTSIZE", (0, 1), (-1, -1), 9),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), background),
+        ("BOX", (0, 0), (-1, -1), 0.7, border),
+        ("LINEBEFORE", (0, 0), (0, -1), 3, border),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
 
-    story.append(answer_table)
-    story.append(Spacer(1, 12))
+    return table
 
-    story.append(
-        Paragraph(
-            "PART C — DETAILED SOLUTIONS",
-            STYLES["SectionCustom"]
+
+# =============== CURRENT AFFAIRS ===============
+
+def strip_markup(text):
+    text = html.unescape(str(text or ""))
+    text = re.sub(
+        r"(?is)<(script|style).*?>.*?</\\1>",
+        " ",
+        text
+    )
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return re.sub(r"\\s+", " ", text).strip()
+
+
+def get_news():
+    searches = [
+        ("India", "India government economy science technology"),
+        ("Science and Space", "India ISRO science space environment"),
+        ("World", "world climate international science technology"),
+    ]
+
+    found = []
+    seen = set()
+
+    for category, query in searches:
+        url = (
+            "https://news.google.com/rss/search?q="
+            + quote_plus(query)
+            + "&hl=en-IN&gl=IN&ceid=IN:en"
         )
+
+        try:
+            response = requests.get(
+                url,
+                timeout=18,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            response.raise_for_status()
+
+            feed = feedparser.parse(response.content)
+
+            for entry in feed.entries:
+                title = strip_markup(entry.get("title", ""))
+                link = entry.get("link", "")
+                summary = strip_markup(entry.get("summary", ""))
+
+                if not title or not link:
+                    continue
+
+                if title.lower() in seen:
+                    continue
+
+                seen.add(title.lower())
+
+                found.append({
+                    "title": title,
+                    "link": link,
+                    "summary": summary[:650],
+                    "category": category,
+                    "published": strip_markup(
+                        entry.get("published", "Date not provided")
+                    )
+                })
+
+        except Exception as error:
+            log.warning("News feed unavailable: %s", error)
+
+    return found[:18]
+
+
+def current_affairs_pdf():
+    content = [
+        para("TODAY'S NEWS DESK", "SectionX"),
+        para(
+            "Recent headlines from RSS feeds. Open each source link "
+            "to read the complete report and verify important facts.",
+            "BodyX"
+        ),
+        Spacer(1, 3 * mm)
+    ]
+
+    articles = get_news()
+
+    if not articles:
+        content.append(info_box(
+            "News feeds temporarily unavailable",
+            "No live headlines were retrieved. This PDF does not invent "
+            "current news. Try running the workflow again later.",
+            ORANGE,
+            PALE_ORANGE
+        ))
+
+    for number, item in enumerate(articles, 1):
+        title = safe_text(item["title"])
+        summary = safe_text(
+            item["summary"] or "No short summary was provided."
+        )
+        category = safe_text(item["category"])
+        published = safe_text(item["published"])
+        link = html.escape(item["link"], quote=True)
+
+        content.append(KeepTogether([
+            para(f"{number:02d}. {title}", "QX"),
+            para(
+                f"<b>Category:</b> {category} &nbsp; "
+                f"<b>Published:</b> {published}",
+                "SmallX"
+            ),
+            para(summary, "BodyX"),
+            para(
+                f'<link href="{link}" color="#2563EB">'
+                f'<u>Read original report</u></link>',
+                "BodyX"
+            ),
+            Spacer(1, 3 * mm)
+        ]))
+
+    content.append(info_box(
+        "Exam note-making tip",
+        "For each important event, note the date, place, organisation, "
+        "person, key number and why the event matters.",
+        BLUE,
+        PALE_BLUE
+    ))
+
+    return make_pdf(
+        "01_Daily_Current_Affairs.pdf",
+        "DAILY CURRENT AFFAIRS",
+        "Recent headlines • Summaries • Source links",
+        BLUE,
+        content
     )
 
-    for index, item in enumerate(questions, start=1):
-        correct_option = item["options"][item["answer"]]
 
-        block = [
-            Paragraph(
-                f"Q{index}. Answer: {item['answer']} — "
-                f"{escape(correct_option)}",
-                STYLES["QuestionCustom"]
-            )
+# =============== STATIC GK ===============
+
+# Each question: topic, difficulty, question, options, correct index, explanation
+GK = [
+("Polity","The Constitution of India was adopted on:",["15 Aug 1947","26 Nov 1949","26 Jan 1950","2 Oct 1950"],1,"It was adopted on 26 November 1949."),
+("Polity","The Constitution came into force on:",["15 Aug 1947","26 Nov 1949","26 Jan 1950","26 Nov 1950"],2,"It came into force on 26 January 1950."),
+("Polity","Fundamental Rights are mainly in which Part?",["Part II","Part III","Part IV","Part IVA"],1,"Part III contains Fundamental Rights."),
+("Polity","Fundamental Duties are listed in:",["Article 14","Article 21","Article 32","Article 51A"],3,"Article 51A lists Fundamental Duties."),
+("Polity","Which Article is associated with constitutional remedies?",["Article 17","Article 21","Article 32","Article 44"],2,"Article 32 provides constitutional remedies."),
+("Polity","The minimum voting age in India is:",["16 years","18 years","21 years","25 years"],1,"The voting age is 18 years."),
+("Polity","A Money Bill is defined under:",["Article 110","Article 123","Article 356","Article 368"],0,"Article 110 defines a Money Bill."),
+("Polity","Who is the constitutional head of the Union?",["Prime Minister","President","Chief Justice","Speaker"],1,"The President is the constitutional head."),
+("Polity","The normal term of the Lok Sabha is:",["4 years","5 years","6 years","7 years"],1,"The normal term is five years unless dissolved earlier."),
+("Polity","Directive Principles are in:",["Part II","Part III","Part IV","Part V"],2,"Part IV contains Directive Principles."),
+("Geography","India's Standard Meridian is:",["68°7′ E","82°30′ E","90° E","75° E"],1,"India's Standard Meridian is 82°30′ E."),
+("Geography","The largest Indian state by area is:",["Madhya Pradesh","Maharashtra","Rajasthan","Uttar Pradesh"],2,"Rajasthan is the largest state by area."),
+("Geography","The smallest Indian state by area is:",["Sikkim","Tripura","Goa","Manipur"],2,"Goa is the smallest state by area."),
+("Geography","The Tropic of Cancer lies near:",["0°","23.5° N","23.5° S","66.5° N"],1,"It lies at approximately 23.5° north."),
+("Geography","The Himalayas are primarily:",["Block mountains","Young fold mountains","Volcanic mountains","Residual hills"],1,"The Himalayas are young fold mountains."),
+("Geography","Which river is often called the Dakshin Ganga?",["Narmada","Godavari","Kaveri","Tapti"],1,"The Godavari is often called the Dakshin Ganga."),
+("Geography","The Thar Desert is mainly in:",["Rajasthan","Assam","Kerala","Bihar"],0,"Most of India's Thar Desert is in Rajasthan."),
+("Geography","Which soil is associated with cotton cultivation?",["Laterite","Black soil","Mountain soil","Desert soil"],1,"Black soil retains moisture and suits cotton."),
+("Geography","The Sundarbans are famous for:",["Coral reefs","Mangrove forests","Cold deserts","Alpine meadows"],1,"The Sundarbans contain extensive mangrove forests."),
+("Geography","Which ocean lies south of India?",["Atlantic","Arctic","Indian","Pacific"],2,"The Indian Ocean lies south of India."),
+("History","The Indian National Congress was founded in:",["1857","1885","1905","1942"],1,"The INC was founded in 1885."),
+("History","The Battle of Plassey took place in:",["1757","1764","1857","1947"],0,"The Battle of Plassey was fought in 1757."),
+("History","The Dandi March took place in:",["1919","1920","1930","1942"],2,"Gandhi's Salt March took place in 1930."),
+("History","The Quit India Movement began in:",["1919","1920","1930","1942"],3,"It was launched in August 1942."),
+("History","Who popularised 'Jai Jawan Jai Kisan'?",["Jawaharlal Nehru","Lal Bahadur Shastri","Sardar Patel","Subhas Bose"],1,"Lal Bahadur Shastri popularised the slogan."),
+("History","The Jallianwala Bagh massacre occurred in:",["1905","1919","1928","1942"],1,"It occurred in Amritsar in 1919."),
+("History","Who founded the Maurya Empire?",["Ashoka","Chandragupta Maurya","Harsha","Kanishka"],1,"Chandragupta Maurya founded the Maurya Empire."),
+("History","The first Mughal emperor in India was:",["Akbar","Humayun","Babur","Shah Jahan"],2,"Babur founded Mughal rule after the First Battle of Panipat in 1526."),
+("History","The Vijayanagara Empire's capital was:",["Hampi","Madurai","Patna","Kannauj"],0,"Hampi was the capital of Vijayanagara."),
+("History","The Non-Cooperation Movement began in:",["1905","1915","1920","1935"],2,"It began in 1920."),
+("Economy","The Reserve Bank of India is India's:",["Commercial bank","Central bank","Rural bank only","Stock exchange"],1,"The RBI is India's central bank."),
+("Economy","GDP measures the value of:",["Only exports","Final goods and services produced domestically","Only taxes","Only agriculture"],1,"GDP measures final production within a country's borders."),
+("Economy","A general sustained rise in prices is:",["Deflation","Inflation","Depreciation","Recession"],1,"Inflation is a general rise in prices."),
+("Economy","GST is generally classified as:",["Direct tax","Indirect tax","Wealth tax","Dividend"],1,"GST is an indirect tax."),
+("Economy","Which institution regulates India's securities market?",["SEBI","ISRO","DRDO","UGC"],0,"SEBI regulates India's securities market."),
+("Economy","India's currency is the:",["Rupee","Yen","Euro","Pound"],0,"The Indian rupee is India's currency."),
+("Economy","A budget deficit occurs when expenditure is:",["Less than income","Equal to income","Greater than receipts","Always zero"],2,"A deficit occurs when spending exceeds relevant receipts."),
+("Economy","NABARD is associated with:",["Space research","Agriculture and rural development","Atomic energy","Telecom"],1,"NABARD supports agriculture and rural development."),
+("Economy","Income tax is generally a:",["Direct tax","Indirect tax","Custom duty only","Consumption tax only"],0,"Income tax is imposed directly on taxable income."),
+("Economy","The policy repo rate is set by the:",["Election Commission","RBI Monetary Policy Committee","Supreme Court","Finance Commission"],1,"The RBI's Monetary Policy Committee sets the policy repo rate."),
+("Science","The SI unit of force is:",["Joule","Newton","Watt","Pascal"],1,"Force is measured in newtons."),
+("Science","The SI unit of power is:",["Watt","Joule","Newton","Coulomb"],0,"Power is measured in watts."),
+("Science","The speed of light in vacuum is approximately:",["3×10^6 m/s","3×10^7 m/s","3×10^8 m/s","3×10^9 m/s"],2,"It is approximately 3 × 10^8 m/s."),
+("Science","Vitamin C deficiency can cause:",["Rickets","Scurvy","Beriberi","Night blindness"],1,"Vitamin C deficiency causes scurvy."),
+("Science","Which pigment helps plants absorb light?",["Haemoglobin","Chlorophyll","Melanin","Keratin"],1,"Chlorophyll absorbs light for photosynthesis."),
+("Science","The most abundant gas in Earth's atmosphere is:",["Oxygen","Carbon dioxide","Nitrogen","Hydrogen"],2,"Nitrogen makes up about 78% of dry air."),
+("Science","The pH of neutral water at about 25°C is:",["0","5","7","14"],2,"Neutral water has pH 7 at about 25°C."),
+("Science","Which blood cells mainly carry oxygen?",["Red blood cells","Platelets","White blood cells","Plasma only"],0,"Haemoglobin in red blood cells carries most oxygen."),
+("Science","The largest organ of the human body is:",["Liver","Skin","Heart","Lung"],1,"The skin is the body's largest organ."),
+("Science","Which vitamin can be produced in skin with sunlight?",["Vitamin A","Vitamin B12","Vitamin C","Vitamin D"],3,"Sunlight enables vitamin D synthesis in skin.")
+]
+
+
+def mcq_story(items):
+    content = []
+
+    for number, item in enumerate(items, 1):
+        topic, level, question, options, answer, explanation = item
+
+        option_text = "<br/>".join(
+            f"{chr(65 + j)}. {safe_text(option)}"
+            for j, option in enumerate(options)
+        )
+
+        content.append(KeepTogether([
+            para(
+                f"Q{number}. [{safe_text(topic)} | "
+                f"{safe_text(level)}] {safe_text(question)}",
+                "QX"
+            ),
+            para(option_text, "BodyX"),
+            Spacer(1, 2 * mm)
+        ]))
+
+    content.append(PageBreak())
+    content.append(para("ANSWER KEY & EXPLANATIONS", "SectionX"))
+
+    for number, item in enumerate(items, 1):
+        topic, level, question, options, answer, explanation = item
+
+        content.append(para(
+            f"Q{number}. Answer: {chr(65 + answer)}. "
+            f"{safe_text(options[answer])}",
+            "AnswerX"
+        ))
+        content.append(para(safe_text(explanation), "BodyX"))
+        content.append(Spacer(1, 1.5 * mm))
+
+    return content
+
+
+def static_gk_pdf():
+    topics = ["Polity", "Geography", "History", "Economy", "Science"]
+    rng = random.Random(DAY + 10)
+
+    all_items = []
+
+    for topic in topics:
+        group = [q for q in GK if q[0] == topic]
+        rng.shuffle(group)
+        all_items.extend(group[:10])
+
+    if len(all_items) != 50:
+        raise RuntimeError(
+            f"Static GK bank has {len(all_items)} questions, expected 50."
+        )
+
+    content = [
+        para("50 MCQs • FIVE SUBJECT AREAS", "SectionX"),
+        info_box(
+            "Today's practice",
+            "10 questions each from Polity, Geography, History, Economy "
+            "and General Science. Attempt first; check answers afterward.",
+            PURPLE,
+            PALE_PURPLE
+        ),
+        Spacer(1, 4 * mm)
+    ]
+
+    content.extend(mcq_story(all_items))
+
+    return make_pdf(
+        "02_Static_GK_50_MCQs.pdf",
+        "STATIC GK — 50 MCQs",
+        "Polity • Geography • History • Economy • General Science",
+        PURPLE,
+        content
+    )
+
+
+# =============== REASONING ===============
+
+def reasoning_bank():
+    bank = []
+
+    # 20 number-series questions
+    for i in range(1, 11):
+        start = i + 2
+        step = i + 2
+        sequence = [start + j * step for j in range(4)]
+        answer = start + 4 * step
+
+        options = [
+            answer,
+            answer + step,
+            answer - 1,
+            answer + 2
         ]
 
-        formula = item.get("formula", "").strip()
+        options = list(dict.fromkeys(options))
+        while len(options) < 4:
+            options.append(answer + len(options) + 5)
 
-        if formula:
-            block.append(
-                Paragraph(
-                    f"<b>Formula / Method:</b> "
-                    f"{escape(formula)}",
-                    STYLES["ExplanationCustom"]
-                )
-            )
+        options = options[:4]
 
-        block.append(
-            Paragraph(
-                f"<b>Explanation:</b> "
-                f"{escape(item['explanation'])}",
-                STYLES["ExplanationCustom"]
-            )
-        )
+        bank.append((
+            "Number series", "Easy",
+            f"Find the next number: {', '.join(map(str, sequence))}, ?",
+            options, options.index(answer),
+            f"The sequence increases by {step} each time. Answer: {answer}."
+        ))
 
-        block.append(Spacer(1, 5))
+    for i in range(2, 12):
+        start = i
+        sequence = [start, start * 2, start * 4, start * 8]
+        answer = start * 16
 
-        story.append(
-            KeepTogether(block)
-        )
+        options = [
+            answer + start,
+            answer,
+            answer // 2,
+            answer + 2 * start
+        ]
 
-    return build_pdf(
-        filename,
-        title,
-        subtitle,
-        story
+        options = list(dict.fromkeys(options))
+        while len(options) < 4:
+            options.append(answer + len(options) * 3)
+
+        options = options[:4]
+
+        bank.append((
+            "Number series", "Medium",
+            f"Find the next number: {', '.join(map(str, sequence))}, ?",
+            options, options.index(answer),
+            f"Each term doubles. Answer: {answer}."
+        ))
+
+    analogies = [
+        ("Bird is to Nest as Bee is to:", ["Hive","Web","Stable","Den"],0,"A bird lives in a nest; a bee lives in a hive."),
+        ("Puppy is to Dog as Kitten is to:", ["Calf","Cat","Foal","Cub"],1,"A kitten is a young cat."),
+        ("Pen is to Write as Knife is to:", ["Cut","Read","Sing","Paint"],0,"A knife is used to cut."),
+        ("Doctor is to Hospital as Teacher is to:", ["Court","School","Farm","Bank"],1,"A teacher commonly works in a school."),
+        ("Eye is to See as Ear is to:", ["Smell","Hear","Touch","Taste"],1,"The ear is used for hearing."),
+        ("Fish is to Water as Bird is to:", ["Soil","Air","Fire","Stone"],1,"Birds move through air."),
+        ("Wheel is to Car as Page is to:", ["Book","Road","Pen","Desk"],0,"A page is part of a book."),
+        ("Hot is to Cold as Light is to:", ["Bright","Dark","Sun","Day"],1,"Light and dark are opposites.")
+    ]
+
+    for question, options, answer, solution in analogies:
+        bank.append((
+            "Analogy", "Easy", question, options, answer, solution
+        ))
+
+    coding = [
+        ("CAT becomes DBU; DOG becomes:", ["EPH","EOG","FPH","DPH"],0,"Move every letter one step forward: D→E, O→P, G→H."),
+        ("SUN becomes TVO; MAP becomes:", ["NBQ","NBO","MBQ","OBQ"],0,"Move every letter one step forward: MAP becomes NBQ."),
+        ("If each letter moves forward one step, PEN becomes:", ["QFO","QEN","RFO","PFN"],0,"P→Q, E→F and N→O."),
+        ("If each letter moves backward one step, DOG becomes:", ["CNF","EPH","COF","DNG"],0,"D→C, O→N and G→F."),
+        ("If each letter moves forward one step, BOX becomes:", ["CPY","COY","BPY","CQY"],0,"B→C, O→P and X→Y.")
+    ]
+
+    for question, options, answer, solution in coding:
+        bank.append((
+            "Coding-decoding", "Medium",
+            question, options, answer, solution
+        ))
+
+    misc = [
+        ("Odd one out", "Easy", "Choose the odd one out.", ["Square","Triangle","Circle","Cube"],3,"Cube is three-dimensional; the others are two-dimensional."),
+        ("Direction sense", "Medium", "A person walks 3 m north and 4 m east. How far from the start?", ["5 m","7 m","1 m","12 m"],0,"Distance = √(3² + 4²) = 5 m."),
+        ("Direction sense", "Medium", "Facing north, turn right twice. Which direction now?", ["East","West","South","North"],2,"North → east → south."),
+        ("Blood relation", "Easy", "A is the brother of B. B is the sister of C. A is C's:", ["Brother","Father","Uncle","Cousin"],0,"A and C are siblings; A is male."),
+        ("Alphabet series", "Medium", "Find the next letter: A, C, F, J, O, ?", ["S","T","U","V"],2,"The jumps are +2, +3, +4, +5, then +6: U."),
+        ("Ranking", "Medium", "Ravi is 7th from the top and 9th from the bottom. Total people?", ["14","15","16","17"],1,"Total = 7 + 9 − 1 = 15."),
+        ("Calendar", "Easy", "How many days are in a leap year?", ["364","365","366","367"],2,"A leap year has 366 days."),
+        ("Syllogism", "Easy", "All roses are flowers. Which statement must be true?", ["All flowers are roses","All roses are flowers","No roses are flowers","All plants are roses"],1,"This repeats the given statement."),
+        ("Comparison", "Easy", "If A > B and B > C, then:", ["A < C","A = C","A > C","Cannot say"],2,"By transitivity, A > C."),
+        ("Number relation", "Medium", "If 4 : 16, then 7 : ?", ["14","21","28","49"],3,"The second number is the square of the first: 7² = 49."),
+        ("Classification", "Easy", "Which does not belong?", ["January","March","May","Monday"],3,"Monday is a weekday; the others are months."),
+        ("Direction sense", "Medium", "Walk 5 km east, then 5 km west. Position?", ["5 km east","5 km west","At start","10 km north"],2,"The movements cancel."),
+        ("Number analogy", "Easy", "If 3 : 9, then 5 : ?", ["10","15","20","25"],3,"The second number is the square of the first."),
+        ("Alphabet position", "Easy", "What is the position of M in the alphabet?", ["11","12","13","14"],2,"M is the 13th letter."),
+        ("Odd one out", "Easy", "Choose the odd one out.", ["2","3","5","9"],3,"2, 3 and 5 are prime; 9 is composite."),
+        ("Logical order", "Easy", "Choose the sensible order.", ["Seed–Plant–Flower–Fruit","Fruit–Seed–Plant–Flower","Plant–Fruit–Seed–Flower","Flower–Seed–Fruit–Plant"],0,"A seed grows into a plant, which can flower and produce fruit."),
+        ("Comparison", "Easy", "If P = Q and Q > R, then:", ["P < R","P > R","P = R","Cannot say"],1,"Since P = Q and Q > R, P > R.")
+    ]
+
+    for topic, level, question, options, answer, solution in misc:
+        bank.append((
+            topic, level, question, options, answer, solution
+        ))
+
+    return bank
+
+
+# =============== ARITHMETIC ===============
+
+def arithmetic_bank():
+    bank = []
+
+    # Percentage questions
+    for i in range(1, 11):
+        number = i * 5 + 10
+        percent = [10, 15, 20, 25, 30][(i - 1) % 5]
+        target = number * 10
+        answer = target * percent // 100
+
+        bank.append((
+            "Percentage", "Easy",
+            f"Find {percent}% of {target}.",
+            [
+                str(answer),
+                str(answer + 5),
+                str(max(0, answer - 5)),
+                str(answer + 10)
+            ],
+            0,
+            f"{percent}/100 × {target} = {answer}."
+        ))
+
+    # Profit and loss
+    for i in range(1, 11):
+        cost = i * 100
+        profit_percent = [10, 12, 15, 20, 25][(i - 1) % 5]
+        selling = cost * (100 + profit_percent) // 100
+
+        bank.append((
+            "Profit and loss", "Medium",
+            f"An item costs ₹{cost} and sells for ₹{selling}. "
+            "Find the profit percentage.",
+            [
+                f"{profit_percent}%",
+                f"{profit_percent + 5}%",
+                f"{max(1, profit_percent - 5)}%",
+                f"{profit_percent + 10}%"
+            ],
+            0,
+            f"Profit = ₹{selling - cost}. Profit % = "
+            f"({selling - cost}/{cost}) × 100 = {profit_percent}%."
+        ))
+
+    # Ratio
+    for i in range(1, 11):
+        a, b = i + 1, i + 3
+        total = (a + b) * 10
+        small = a * 10
+
+        bank.append((
+            "Ratio", "Easy",
+            f"Divide {total} in the ratio {a}:{b}. "
+            "What is the smaller share?",
+            [str(small), str(small + 10), str(small - 10), str(small + 20)],
+            0,
+            f"Total parts = {a+b}; one part = {total}/{a+b} = 10. "
+            f"Smaller share = {a} × 10 = {small}."
+        ))
+
+    # Simple interest
+    for i in range(1, 11):
+        principal = i * 1000
+        rate = [4, 5, 6, 8, 10][(i - 1) % 5]
+        years = [2, 3][i % 2]
+        interest = principal * rate * years // 100
+
+        bank.append((
+            "Simple interest", "Medium",
+            f"Find simple interest on ₹{principal} at {rate}% per year "
+            f"for {years} years.",
+            [
+                f"₹{interest}",
+                f"₹{interest + 100}",
+                f"₹{max(0, interest - 100)}",
+                f"₹{interest + 200}"
+            ],
+            0,
+            f"SI = P × R × T / 100 = ({principal} × {rate} × "
+            f"{years})/100 = ₹{interest}."
+        ))
+
+    # Speed, distance and time
+    for i in range(1, 11):
+        speed = i * 5 + 20
+        hours = (i % 4) + 2
+        distance = speed * hours
+
+        bank.append((
+            "Speed, distance and time", "Easy",
+            f"A vehicle travels {distance} km in {hours} hours. "
+            "Find its average speed.",
+            [
+                f"{speed} km/h",
+                f"{speed + 5} km/h",
+                f"{speed - 5} km/h",
+                f"{speed + 10} km/h"
+            ],
+            0,
+            f"Speed = distance/time = {distance}/{hours} = {speed} km/h."
+        ))
+
+    return bank
+
+
+def shuffled_daily(bank, count, seed):
+    rng = random.Random(seed)
+    items = list(bank)
+    rng.shuffle(items)
+
+    if len(items) < count:
+        items = (
+            items * ((count // len(items)) + 1)
+        )[:count]
+
+    return items[:count]
+
+
+def reasoning_pdf():
+    bank = reasoning_bank()
+    items = shuffled_daily(bank, 50, DAY + 1000)
+
+    content = [
+        para("50 QUESTIONS • EASY TO MEDIUM", "SectionX"),
+        info_box(
+            "How to use this paper",
+            "Attempt without a calculator. Mark difficult questions, "
+            "then check the explanations. This built-in question bank "
+            "rotates; some patterns can repeat on later days.",
+            TEAL,
+            PALE_TEAL
+        ),
+        Spacer(1, 4 * mm)
+    ]
+
+    content.extend(mcq_story(items))
+
+    return make_pdf(
+        "03_Reasoning_50_Questions.pdf",
+        "REASONING — 50 QUESTIONS",
+        "Series • Analogy • Coding • Directions • Relations • Logic",
+        TEAL,
+        content
     )
 
 
-# ==========================================================
-# TELEGRAM DELIVERY
-# ==========================================================
+def arithmetic_pdf():
+    bank = arithmetic_bank()
+    items = shuffled_daily(bank, 50, DAY + 2000)
 
-def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError(
-            "Telegram bot token or chat ID is missing."
-        )
+    content = [
+        para("50 QUESTIONS • FORMULAS & SOLUTIONS", "SectionX"),
+        info_box(
+            "Formula quick sheet",
+            "<b>Percentage:</b> (Part / Whole) × 100<br/>"
+            "<b>Profit:</b> SP − CP; Profit % = Profit / CP × 100<br/>"
+            "<b>Ratio share:</b> Total × required parts / total parts<br/>"
+            "<b>Simple interest:</b> P × R × T / 100<br/>"
+            "<b>Speed:</b> Distance / Time",
+            ORANGE,
+            PALE_ORANGE
+        ),
+        Spacer(1, 4 * mm)
+    ]
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    content.extend(mcq_story(items))
+
+    return make_pdf(
+        "04_Arithmetic_50_Questions.pdf",
+        "ARITHMETIC — 50 QUESTIONS",
+        "Percentages • Profit and loss • Ratio • Interest • Speed",
+        ORANGE,
+        content
     )
 
-    response = session.post(
-        url,
-        data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        },
-        timeout=30
-    )
 
-    if response.status_code != 200:
-        logging.error(
-            "Telegram message failed: %s",
-            response.text[:500]
-        )
+# =============== TELEGRAM ===============
 
-        response.raise_for_status()
+def send_document(path, caption):
+    api = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
 
-
-def send_pdf_to_telegram(pdf_path):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError(
-            "Telegram bot token or chat ID is missing."
-        )
-
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    )
-
-    caption = (
-        f"📚 Daily Study PDF\n"
-        f"📅 {TODAY_TEXT}\n"
-        f"📄 {pdf_path.name}"
-    )
-
-    with open(pdf_path, "rb") as pdf_file:
-        response = session.post(
-            url,
-            data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "caption": caption
-            },
+    with open(path, "rb") as file:
+        response = requests.post(
+            api,
+            data={"chat_id": CHAT_ID, "caption": caption},
             files={
                 "document": (
-                    pdf_path.name,
-                    pdf_file,
+                    os.path.basename(path),
+                    file,
                     "application/pdf"
                 )
             },
-            timeout=120
+            timeout=90
         )
 
-    if response.status_code != 200:
-        logging.error(
-            "PDF upload failed: %s",
-            response.text[:500]
+    if not response.ok:
+        raise RuntimeError(
+            f"Telegram returned HTTP {response.status_code}: "
+            f"{response.text[:300]}"
         )
 
-        response.raise_for_status()
+    result = response.json()
 
-    logging.info(
-        "Sent to Telegram: %s",
-        pdf_path.name
-    )
+    if not result.get("ok"):
+        raise RuntimeError(
+            "Telegram rejected the document: "
+            + result.get("description", "unknown error")
+        )
 
+    log.info("Telegram sent: %s", os.path.basename(path))
 
-# ==========================================================
-# MAIN PROGRAM
-# ==========================================================
 
 def main():
-    logging.info("======================================")
-    logging.info("DAILY STUDY BOT STARTING")
-    logging.info("Date: %s", TODAY_TEXT)
-    logging.info("Model: %s", GEMINI_MODEL)
-    logging.info("Static GK topic: %s", GK_TOPIC)
-    logging.info("Arithmetic topic: %s", ARITHMETIC_TOPIC)
-    logging.info("======================================")
-
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError(
-            "Missing Telegram GitHub Secrets."
+    tasks = [
+        (
+            current_affairs_pdf,
+            "Daily Current Affairs — recent headlines and source links"
+        ),
+        (
+            static_gk_pdf,
+            "Static GK — 50 MCQs with explanations"
+        ),
+        (
+            reasoning_pdf,
+            "Reasoning — 50 questions with explanations"
+        ),
+        (
+            arithmetic_pdf,
+            "Arithmetic — 50 questions with worked solutions"
         )
+    ]
 
-    pdf_files = []
+    for build_pdf, caption in tasks:
+        path = build_pdf()
+        send_document(path, caption)
 
-    try:
-        # 1. Current affairs
-        logging.info("Preparing current-affairs PDF...")
-
-        pdf_files.append(
-            create_current_affairs_pdf()
-        )
-
-        # 2. Static GK
-        logging.info("Generating Static GK questions...")
-
-        gk_questions = generate_questions(
-            subject="Static GK",
-            topic=GK_TOPIC,
-            total=50
-        )
-
-        pdf_files.append(
-            create_mcq_pdf(
-                filename="02_Static_GK.pdf",
-                title="STATIC GENERAL KNOWLEDGE",
-                subtitle=(
-                    f"{GK_TOPIC} | 50 MCQs | {TODAY_TEXT}"
-                ),
-                questions=gk_questions
-            )
-        )
-
-        # 3. Reasoning
-        logging.info("Generating reasoning questions...")
-
-        reasoning_questions = generate_questions(
-            subject="Reasoning",
-            topic=(
-                "Mixed reasoning: series, analogy, "
-                "classification, coding-decoding, directions, "
-                "blood relations, ranking and logical reasoning"
-            ),
-            total=50
-        )
-
-        pdf_files.append(
-            create_mcq_pdf(
-                filename="03_Reasoning_Practice.pdf",
-                title="REASONING PRACTICE",
-                subtitle=(
-                    f"50 MCQs | Easy to Difficult | {TODAY_TEXT}"
-                ),
-                questions=reasoning_questions
-            )
-        )
-
-        # 4. Arithmetic
-        logging.info("Generating arithmetic questions...")
-
-        arithmetic_questions = generate_questions(
-            subject="Arithmetic",
-            topic=ARITHMETIC_TOPIC,
-            total=50
-        )
-
-        pdf_files.append(
-            create_mcq_pdf(
-                filename="04_Arithmetic_Practice.pdf",
-                title="ARITHMETIC PRACTICE",
-                subtitle=(
-                    f"{ARITHMETIC_TOPIC} | 50 MCQs | {TODAY_TEXT}"
-                ),
-                questions=arithmetic_questions
-            )
-        )
-
-        # Send PDFs only after all four have been created.
-        logging.info("All PDFs generated successfully.")
-
-        send_telegram_message(
-            f"🎯 Daily Study Pack — {TODAY_TEXT}\n\n"
-            f"Your four study PDFs are ready!\n\n"
-            f"📰 Current Affairs: recent news digest\n"
-            f"🌍 Static GK: {GK_TOPIC}\n"
-            f"🧠 Reasoning: 50 questions\n"
-            f"➗ Arithmetic: {ARITHMETIC_TOPIC}\n\n"
-            f"Answers and explanations are included."
-        )
-
-        for pdf_path in pdf_files:
-            send_pdf_to_telegram(pdf_path)
-
-        send_telegram_message(
-            "✅ All four PDFs have been delivered successfully!"
-        )
-
-        logging.info("BOT COMPLETED SUCCESSFULLY.")
-
-    except Exception as error:
-        logging.exception(
-            "The study bot failed."
-        )
-
-        # Notify Telegram about the failure if possible.
-        try:
-            send_telegram_message(
-                "⚠️ Daily Study Bot encountered an error.\n"
-                "Please check the GitHub Actions log.\n"
-                f"Error: {str(error)[:700]}"
-            )
-        except Exception:
-            logging.exception(
-                "Could not send the error notification."
-            )
-
-        raise
+    log.info("SUCCESS: all four PDFs generated and sent.")
 
 
 if __name__ == "__main__":
