@@ -66,7 +66,19 @@ if not GEMINI_API_KEY:
     raise RuntimeError("Missing GEMINI_API_KEY secret.")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
+# OpenAI fallback configuration
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
+OPENAI_MODEL = os.environ.get(
+    "OPENAI_MODEL",
+    "gpt-4.1-mini"
+)
+
+openai_client = (
+    OpenAI(api_key=OPENAI_API_KEY)
+    if OPENAI_API_KEY
+    else None
+)
 # =========================================================
 # PDF DESIGN
 # =========================================================
