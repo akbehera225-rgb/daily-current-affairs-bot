@@ -267,58 +267,112 @@ def create_pdf(filename, story):
 
     logging.info("Created PDF: %s", path)
     return path
+# =========================================================
+# AI GENERATION — GEMINI PRIMARY, OPENAI FALLBACK
+# =========================================================
 
-# =========================================================
-# GEMINI GENERATION
-# =========================================================
-def generate_json(prompt, retries=5):
-    for attempt in range(retries):
+def generate_json(prompt, retries=3):
+
+    # -----------------------------------------------------
+    # 1. TRY GEMINI FIRST
+    # -----------------------------------------------------
+
+    if client is not None:
+        for attempt in range(retries):
+            try:
+                logging.info(
+                    "Generating content with Gemini: %s",
+                    GEMINI_MODEL,
+                )
+
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.7,
+                    ),
+                )
+
+                response_text = response.text
+
+                if not response_text:
+                    raise ValueError("Gemini returned an empty response.")
+
+                response_text = re.sub(
+                    r"^\s*```(?:json)?\s*|\s*```\s*$",
+                    "",
+                    response_text,
+                    flags=re.IGNORECASE,
+                ).strip()
+
+                result = json.loads(response_text)
+
+                logging.info("Gemini generation successful.")
+                return result
+
+            except Exception as exc:
+                logging.warning(
+                    "Gemini attempt %s/%s failed: %s",
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+
+                if attempt < retries - 1:
+                    time.sleep(2 ** (attempt + 1))
+
+    # -----------------------------------------------------
+    # 2. AUTOMATICALLY TRY OPENAI
+    # -----------------------------------------------------
+
+    if openai_client is not None:
         try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.7,
-                ),
+            logging.info(
+                "Switching to OpenAI model: %s",
+                OPENAI_MODEL,
             )
 
-            response_text = response.text
+            response = openai_client.responses.create(
+                model=OPENAI_MODEL,
+                instructions=(
+                    "You are a reliable educational content generator. "
+                    "Return valid JSON only, matching the structure "
+                    "requested by the user. Do not use Markdown fences."
+                ),
+                input=prompt,
+                text={
+                    "format": {
+                        "type": "json_object"
+                    }
+                },
+            )
+
+            response_text = response.output_text
 
             if not response_text:
-                raise ValueError("Gemini returned an empty response.")
+                raise ValueError("OpenAI returned an empty response.")
 
-            response_text = re.sub(
-                r"^\s*```(?:json)?\s*|\s*```\s*$",
-                "",
-                response_text,
-                flags=re.IGNORECASE,
-            ).strip()
+            result = json.loads(response_text)
 
-            return json.loads(response_text)
+            logging.info("OpenAI generation successful.")
+            return result
 
         except Exception as exc:
-            logging.warning(
-                "Gemini attempt %s/%s failed: %s",
-                attempt + 1,
-                retries,
+            logging.exception(
+                "OpenAI fallback failed: %s",
                 exc,
             )
 
-            if attempt == retries - 1:
-                raise
+    # -----------------------------------------------------
+    # 3. BOTH PROVIDERS FAILED
+    # -----------------------------------------------------
 
-            wait_seconds = min(10 * (2 ** attempt), 60)
-            wait_seconds += random.uniform(1, 5)
-
-            logging.info(
-                "Retrying Gemini in %.1f seconds...",
-                wait_seconds,
-            )
-
-            time.sleep(wait_seconds)
-
-    raise RuntimeError("Gemini generation failed.")
+    raise RuntimeError(
+        "Content generation failed. "
+        "Check Gemini/OpenAI API keys, model access, "
+        "API quotas, network connectivity, and execution logs."
+    )
 
 # =========================================================
 # CURRENT AFFAIRS NEWS
