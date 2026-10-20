@@ -258,13 +258,7 @@ def create_pdf(filename, story):
 # =========================================================
 # GEMINI GENERATION
 # =========================================================
-
- def generate_json(prompt, retries=5):
-    """
-    Ask Gemini for JSON and validate the response.
-    Retries temporary errors using exponential backoff.
-    """
-
+def generate_json(prompt, retries=5):
     for attempt in range(retries):
         try:
             response = client.models.generate_content(
@@ -281,7 +275,6 @@ def create_pdf(filename, story):
             if not response_text:
                 raise ValueError("Gemini returned an empty response.")
 
-            # Remove code fences if the model returns them.
             response_text = re.sub(
                 r"^\s*```(?:json)?\s*|\s*```\s*$",
                 "",
@@ -302,7 +295,6 @@ def create_pdf(filename, story):
             if attempt == retries - 1:
                 raise
 
-            # Wait progressively longer between attempts.
             wait_seconds = min(10 * (2 ** attempt), 60)
             wait_seconds += random.uniform(1, 5)
 
